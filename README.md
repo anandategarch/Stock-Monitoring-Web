@@ -138,6 +138,10 @@ Selesai — cek di Supabase Dashboard → **Table Editor**: tabel `RunBatch`, `P
    di Vercel.
 2. Tab **⚙️ Config & Admin** → **Isi data demo (2 periode)** → sukses menulis snapshot
    ke Supabase (lihat juga di Supabase Table Editor: `PeriodSnapshot` berisi 2 baris ACTIVE).
+
+   > Bila database Anda sudah berisi 2 periode demo dari **seed pra-deploy** (diisi sebelum
+   > import ke Vercel), tombol ini menolak dengan pesan "sudah ada snapshot aktif" (HTTP 409)
+   > — itu perilaku yang benar, data sudah ada dan tidak perlu diulang.
 3. Jelajahi semua tab — Pivot, Deviasi GR/PCS, Selisih IN, Nominal, Laporan (Komparasi),
    Follow-Up, Rincian PO, Kualitas Data semuanya hidup dari data snapshot.
 
@@ -151,6 +155,7 @@ Selesai — cek di Supabase Dashboard → **Table Editor**: tabel `RunBatch`, `P
 | `bun run db:push:supabase` gagal connect | Direct connection perlu IPv4 addon di beberapa jaringan, atau coba dari mesin dengan IPv6 — Supabase juga menyediakan **Session pooler** sebagai `DIRECT_URL` alternatif untuk DDL. |
 | Badge “engine mati” (merah) | Fallback embedded dimatikan (`SM_ENGINE_EMBED_FALLOFF=off` di env Vercel) — hapus variabel tersebut, atau host engine (§5). |
 | Halaman terbuka tapi semua tabel kosong | Belum ada snapshot — jalankan **Isi data demo** (Config) atau ingest bundle real dari self-host. |
+| Tombol **Isi data demo** menolak (409 "sudah ada snapshot aktif") | Guard anti-campur: seed hanya untuk database kosong. Bila `PeriodSnapshot` sudah berisi baris ACTIVE, data demo sudah tersedia. Untuk mengulang dari nol: hapus periode lewat tab **Config & Admin** terlebih dahulu. |
 
 ---
 
