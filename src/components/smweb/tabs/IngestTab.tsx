@@ -5,10 +5,10 @@
 // diproses → pratinjau → Komit (FR-4: tidak pernah menimpa snapshot diam-diam).
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type InputHTMLAttributes } from "react";
 import {
-  AlertTriangle, CheckCircle2, Database, FileWarning, FolderOpen, PackageOpen,
-  Play, Rocket, Save, UploadCloud, XCircle,
+  AlertTriangle, CheckCircle2, Database, FileWarning, FolderOpen, FolderTree,
+  Loader2, PackageOpen, Play, Rocket, Save, UploadCloud, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns } from "@/hooks/use-sm-api";
+import { collectExcelFromFolder, MAX_FOLDER_BYTES, zipPickedFolder } from "@/lib/folder-pick";
 import type { BundleManifest } from "@/lib/types";
 import { useSmStore } from "@/store/use-sm-store";
 import { EmptyState } from "@/components/smweb/empty-state";
@@ -29,6 +30,14 @@ import { fmtDateTime, fmtInt, fmtQty, fmtRp, fmtSignedQty, periodLabel, signedQt
 import { toast } from "sonner";
 
 type EngineMode = "demo" | "bundle";
+
+// webkitdirectory/directory: atribut non-standar (boolean — hadir = aktif)
+// untuk pemilih FOLDER: browser menyerahkan seluruh isi folder pilihan user,
+// path relatif tiap file tersedia di File.webkitRelativePath.
+const folderInputProps = {
+  webkitdirectory: "",
+  directory: "",
+} as unknown as InputHTMLAttributes<HTMLInputElement>;
 
 export function IngestTab() {
   const setActiveTab = useSmStore((s) => s.setActiveTab);
@@ -39,7 +48,9 @@ export function IngestTab() {
   const [bundleName, setBundleName] = useState("");
   const [manifest, setManifest] = useState<BundleManifest | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [folderStage, setFolderStage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const process = useIngestProcess();
   const commit = useIngestCommit();
@@ -48,6 +59,15 @@ export function IngestTab() {
   const runList = runsData?.runs ?? [];
   const { data: detail, isPending: detailPending } = useRunDetail(selectedRunId);
 
+  const applyManifest = (out: BundleManifest) => {
+    setManifest(out);
+    setBundleName(out.name);
+    const missing = out.missingFolders.length;
+    toast.success(
+      `Bundle "${out.name}" terunggah: ${out.fileCount} file Excel · ${out.folders.length - missing}/${out.folders.length} folder dikenali${missing ? ` · ${missing} folder kosong/tdak ada` : ""}.`,
+    );
+  };
+
   const onPickFile = (file: File | null) => {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".zip")) {
@@ -55,16 +75,47 @@ export function IngestTab() {
       return;
     }
     upload.mutate(file, {
-      onSuccess: (out) => {
-        setManifest(out);
-        setBundleName(out.name);
-        const missing = out.missingFolders.length;
-        toast.success(
-          `Bundle "${out.name}" terunggah: ${out.fileCount} file Excel · ${out.folders.length - missing}/${out.folders.length} folder dikenali${missing ? ` · ${missing} folder kosong/tdak ada` : ""}.`,
-        );
-      },
+      onSuccess: applyManifest,
       onError: (err) => toast.error(err instanceof Error ? err.message : "Unggah gagal."),
     });
+  };
+
+  // Pilih folder export LANGSUNG dari komputer (tanpa zip manual): browser
+  // menyerahkan isi folder pilihan user → file Excel dibungkus ZIP otomatis
+  // di sini (folder-pick.ts) → diunggah lewat jalur yang sama dengan ZIP manual
+  // — server tak peduli ZIP dibuat siapa (satu jalur validasi FR-2).
+  const onPickFolder = async (raw: File[]) => {
+    if (raw.length === 0) return;
+    setFolderStage("Memindai folder…");
+    try {
+      const scan = collectExcelFromFolder(raw);
+      if (scan.files.length === 0) {
+        toast.error(
+          "Tidak ada file Excel (.xlsx/.xls/.xlsb) di folder itu — pilih folder export Accurate (struktur 14 folder config.json).",
+        );
+        return;
+      }
+      if (scan.totalBytes > MAX_FOLDER_BYTES) {
+        toast.error(
+          `Total file Excel ${Math.round(scan.totalBytes / 1024 / 1024)} MB — di atas batas aman 380 MB. Pisahkan per periode atau unggah sebagai ZIP.`,
+        );
+        return;
+      }
+      setFolderStage(
+        `Membaca ${scan.files.length} file Excel (${(scan.totalBytes / 1024 / 1024).toFixed(1)} MB)…`,
+      );
+      const zip = await zipPickedFolder(scan, (done, total) => {
+        setFolderStage(done === total ? "Membungkus ZIP…" : `Membaca file ${done}/${total}…`);
+      });
+      upload.mutate(zip, {
+        onSuccess: applyManifest,
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Unggah gagal."),
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Gagal membaca folder.");
+    } finally {
+      setFolderStage(null);
+    }
   };
 
   const onProcess = () => {
@@ -119,8 +170,9 @@ export function IngestTab() {
         </h2>
         <p className="text-sm text-muted-foreground mt-1">
           Jalankan pipeline atas bundle export Accurate. Mode <strong>produksi</strong> memakai engine
-          FastAPI yang membungkus pipeline asli v3.9.71 apa adanya (0-rewrite, FR-10) — unggah ZIP
-          bundle; mode <strong>demo</strong> memakai data sintetis deterministik. Hasil run menjadi{" "}
+          FastAPI yang membungkus pipeline asli v3.9.71 apa adanya (0-rewrite, FR-10) — pilih
+          <strong> folder export langsung</strong> (ZIP dibuat otomatis di browser, tanpa zip manual)
+          atau unggah ZIP bundle; mode <strong>demo</strong> memakai data sintetis deterministik. Hasil run menjadi{" "}
           <strong>pratinjau</strong> — snapshot periode hanya tersimpan setelah kamu menekan{" "}
           <strong>Komit</strong> (FR-4: tidak pernah menimpa snapshot lama diam-diam).
         </p>
@@ -162,7 +214,7 @@ export function IngestTab() {
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Engine FastAPI :3031 — pipeline asli v3.9.71 atas bundle export Accurate kamu
-                (unggah ZIP 14 folder, FR-1).
+                (pilih folder langsung / unggah ZIP 14 folder, FR-1).
               </p>
             </div>
           </div>
@@ -175,11 +227,14 @@ export function IngestTab() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium flex items-center gap-2">
-                <UploadCloud className="h-4 w-4" aria-hidden /> Unggah ZIP bundle export Accurate
+                <UploadCloud className="h-4 w-4" aria-hidden /> Unggah bundle export Accurate
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                .zip berisi 14 folder sesuai config.json (2. 22.05 · 4. 42.05 · dst.) — batas 400 MB.
-                Struktur divalidasi per folder; folder kosong dilaporkan jujur (tetap bisa diproses).
+                <strong>Pilih folder</strong> export langsung dari komputer — file Excel di dalamnya
+                dibungkus ZIP otomatis di browser (tanpa zip manual); atau pilih file{" "}
+                <strong>.zip</strong> yang sudah ada. Isi: 14 folder sesuai config.json
+                (2. 22.05 · 4. 42.05 · dst.) — batas 400 MB. Struktur divalidasi per folder;
+                folder kosong dilaporkan jujur (tetap bisa diproses).
               </p>
             </div>
             <input
@@ -187,21 +242,64 @@ export function IngestTab() {
               type="file"
               accept=".zip"
               className="hidden"
-              onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                e.target.value = ""; // pilih ulang file yang sama tetap memicu onChange
+                onPickFile(f);
+              }}
             />
-            <Button
-              variant="outline"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={upload.isPending}
-              className="gap-2"
-            >
-              {upload.isPending ? "Mengunggah…" : (
-                <>
-                  <UploadCloud className="h-4 w-4" aria-hidden /> Pilih ZIP…
-                </>
-              )}
-            </Button>
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const raw = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                void onPickFolder(raw);
+              }}
+              {...folderInputProps}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={() => folderInputRef.current?.click()}
+                disabled={upload.isPending || Boolean(folderStage)}
+                className="gap-2"
+              >
+                {folderStage ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Menyiapkan…
+                  </>
+                ) : upload.isPending ? (
+                  "Mengunggah…"
+                ) : (
+                  <>
+                    <FolderTree className="h-4 w-4" aria-hidden /> Pilih Folder…
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={upload.isPending || Boolean(folderStage)}
+                className="gap-2"
+              >
+                {upload.isPending ? "Mengunggah…" : (
+                  <>
+                    <UploadCloud className="h-4 w-4" aria-hidden /> Pilih ZIP…
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
+
+          {(folderStage || upload.isPending) && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              {folderStage ?? "Mengunggah ZIP ke server…"}
+            </p>
+          )}
 
           {manifest ? (
             <div className="space-y-2">
@@ -250,7 +348,7 @@ export function IngestTab() {
             </div>
           ) : (
             <p className="text-xs text-muted-foreground border-t pt-3">
-              Belum ada bundle terunggah — pilih ZIP untuk melihat manifest per folder sebelum diproses.
+              Belum ada bundle terunggah — pilih folder export / ZIP untuk melihat manifest per folder sebelum diproses.
             </p>
           )}
         </div>
@@ -324,7 +422,7 @@ export function IngestTab() {
           ) : (
             <>
               Engine demo menghasilkan bundle sintetis deterministik (kontrak §4) — bukan angka Accurate.
-              Upload ZIP bundle produksi aktif pada mode <em>Produksi</em> di atas (FR-1).
+              Pilih folder / unggah ZIP bundle produksi aktif pada mode <em>Produksi</em> di atas (FR-1).
             </>
           )}
         </p>

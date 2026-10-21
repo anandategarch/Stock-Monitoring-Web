@@ -3,8 +3,8 @@ import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
 import { unzipSync } from "fflate";
-import { BUNDLES_DIR, FOLDER_TEMPLATE, bundleDir, saveBundleMeta } from "@/lib/bundles";
-import type { BundleFolderStat, BundleManifest } from "@/lib/types";
+import { BUNDLES_DIR, FOLDER_TEMPLATE, bundleDir, computeFolderStats, saveBundleMeta } from "@/lib/bundles";
+import type { BundleManifest } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -57,12 +57,7 @@ export async function POST(req: NextRequest) {
     let fileCount = 0;
     let totalBytes = 0;
     let skippedEntries = 0;
-    const folderStat = new Map<string, BundleFolderStat>(
-      FOLDER_TEMPLATE.map((t) => [
-        t.folderName,
-        { folderKey: t.folderKey, folderName: t.folderName, fileCount: 0, totalBytes: 0, present: false },
-      ]),
-    );
+    const excelEntries: { path: string; bytes: number }[] = [];
 
     await fs.mkdir(dir, { recursive: true });
 
@@ -91,14 +86,7 @@ export async function POST(req: NextRequest) {
       await fs.writeFile(dest, data);
       fileCount += 1;
       totalBytes += data.byteLength;
-
-      const top = norm.split(/[/\\]/)[0];
-      const st = folderStat.get(top);
-      if (st) {
-        st.fileCount += 1;
-        st.totalBytes += data.byteLength;
-        st.present = true;
-      }
+      excelEntries.push({ path: norm, bytes: data.byteLength });
     }
 
     if (fileCount === 0) {
@@ -112,8 +100,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const folders = FOLDER_TEMPLATE.map((t) => folderStat.get(t.folderName)!);
-    const missingFolders = folders.filter((f) => !f.present).map((f) => f.folderKey);
+    // FR-2 + konsistensi engine: statistik per folder kanonik, dengan
+    // normalisasi SATU folder pembungkus (lihat computeFolderStats).
+    const { folders, missingFolders } = computeFolderStats(excelEntries);
     const manifest: BundleManifest = {
       bundleId,
       name: file.name.replace(/\.zip$/i, ""),

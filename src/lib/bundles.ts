@@ -5,7 +5,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
-import type { BundleManifest } from "@/lib/types";
+import type { BundleFolderStat, BundleManifest } from "@/lib/types";
 
 export const BUNDLES_DIR = path.join(process.cwd(), "bundles");
 
@@ -51,6 +51,49 @@ export async function readBundleMeta(bundleId: string): Promise<BundleManifest |
   } catch {
     return null;
   }
+}
+
+const topSegment = (p: string) => p.split(/[/\\]/)[0];
+
+/**
+ * Statistik folder kanonik (FR-2) dari daftar path file Excel hasil ekstraksi.
+ * Bila TIDAK ada folder kanonik di level teratas DAN semua file berada di
+ * bawah SATU folder pembungkus (mis. ZIP hasil macOS "Compress" atau pilih
+ * folder induk via webkitdirectory), statistik dihitung satu level di bawahnya —
+ * konsisten dengan resolveBundlePath() yang juga menurunkan RootPath engine
+ * satu level, sehingga manifest UI tak pernah bertentangan dengan engine.
+ */
+export function computeFolderStats(entries: { path: string; bytes: number }[]): {
+  folders: BundleFolderStat[];
+  missingFolders: string[];
+} {
+  const canonical = new Set(FOLDER_TEMPLATE.map((t) => t.folderName));
+  const topHasCanonical = entries.some((e) => canonical.has(topSegment(e.path)));
+  const tops = new Set(entries.map((e) => topSegment(e.path)));
+  const unwrap = !topHasCanonical && tops.size === 1;
+
+  const stat = new Map<string, BundleFolderStat>(
+    FOLDER_TEMPLATE.map((t) => [
+      t.folderName,
+      { folderKey: t.folderKey, folderName: t.folderName, fileCount: 0, totalBytes: 0, present: false },
+    ]),
+  );
+  for (const e of entries) {
+    const segs = e.path.split(/[/\\]/);
+    const top = unwrap ? segs[1] : segs[0];
+    if (!top) continue; // file tepat di root pembungkus — tak masuk folder mana pun
+    const st = stat.get(top);
+    if (st) {
+      st.fileCount += 1;
+      st.totalBytes += e.bytes;
+      st.present = true;
+    }
+  }
+  const folders = FOLDER_TEMPLATE.map((t) => stat.get(t.folderName)!);
+  return {
+    folders,
+    missingFolders: folders.filter((f) => !f.present).map((f) => f.folderKey),
+  };
 }
 
 /**
