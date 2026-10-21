@@ -29,9 +29,10 @@ single-user (D-6) · repo baru terpisah (D-8).
 | **Self-host (VPS/Railway: Next.js + engine co-located)** | ✅ penuh | ✅ | ✅ |
 | **Dev lokal (SQLite)** | ✅ (jalankan engine produksi lokal) | ✅ | ✅ |
 
-\* filesystem serverless Vercel bersifat ephemeral sehingga unggah & ekstraksi bundle ZIP
-belum didukung di Vercel murni (roadmap: storage bersama, PRD Fase 5). Untuk bundle real
-sekarang, pakai self-host (§5.2) — semua fitur lain tetap penuh di Vercel.
+\* filesystem serverless Vercel bersifat ephemeral: unggah bundle kini ditulis ke `/tmp`
+(eksplisit saat `VERCEL=1`) sehingga **manifest pratinjau per folder tetap bisa dipakai di Vercel**,
+tapi proses bundle real tetap butuh engine FastAPI yang di-host (§5.2) — komit ulang (FR-12)
+antar-lambda akan jujur meminta unggah ulang (roadmap: storage bersama, PRD Fase 5).
 
 **Fallback embedded**: bila service engine demo (`SM_ENGINE_URL`) tidak terjangkau,
 run DEMO (tanpa bundleId) otomatis diproses generator yang di-bundle ke dalam aplikasi —
@@ -39,6 +40,13 @@ kode generator **identik** dengan `mini-services/engine` sehingga hasil determin
 sama (FR-12 idempotent tetap sahih; run di service, komit via embedded = snapshot konsisten).
 Run bundle real TIDAK PERNAH di-fallback — gagal jujur (NFR-3). Matikan dengan
 `SM_ENGINE_EMBED_FALLBACK=off`.
+
+**Pilih folder tanpa ZIP manual (FR-1)**: di tab Proses & Ingest mode *Produksi*, tombol
+**Pilih Folder…** (input `webkitdirectory`) membaca folder export Accurate langsung dari
+komputer kamu — file Excel-nya dibungkus ZIP otomatis di browser (`fflate`, level 0) lalu
+masuk jalur unggah yang sama dengan ZIP manual (satu jalur validasi manifest FR-2, batas
+400 MB; folder induk/pembungkus otomatis dinormalisasi). Tombol **Pilih ZIP…** tetap
+tersedia untuk `.zip` yang sudah jadi.
 
 ---
 
