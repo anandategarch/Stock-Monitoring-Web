@@ -1,0 +1,7 @@
+{
+  "name": "sm-engine",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  }
+}

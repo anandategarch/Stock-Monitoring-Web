@@ -1,0 +1,9 @@
+# v3.9.59 — pin pandas <3: pandas 3.x (CoW default) mengubah semantik
+# to_numpy() (read-only) + astype(str) NaN + parser tanggal — data app ini
+# diverifikasi pada pandas 2.x (1379 cek UI + mock). Jangan naikkan sebelum
+# audit penuh terhadap pandas 3.
+pandas>=2.0.0,<3
+openpyxl>=3.1.0
+numpy>=1.24.0
+python-calamine>=0.8.0
+pyxlsb>=0.7.0

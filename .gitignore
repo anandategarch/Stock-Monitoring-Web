@@ -1,0 +1,89 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+local-*
+.claude
+.z-ai-config
+*.log
+dev.log
+dev.out.log
+test
+prompt
+
+server.log
+# Skills directory
+/skills/
+# local database & env
+db/*.db
+.env
+
+# bundle upload produksi (engine FastAPI)
+/bundles/
+
+# ============================================================
+# SM-WEB (Task 44) — higien repo: artefak sandbox/internal TIDAK
+# ikut ke repo produk (lihat README.md §6). Semua tetap ada lokal.
+# ============================================================
+/tool-results/
+/audit_v3934/
+/agent-ctx/
+/download/
+/examples/
+/tests/
+/.zscripts/
+/worklog.md
+/Caddyfile
+/audit_format_resilience.py
+/bundles/
+# artefak desktop v3.9.x (screenshot & referensi UI — tidak dipakai app web)
+/public/dashboard-*.png
+/public/deviasi-*.png
+/public/ingest-*.png
+/public/pivot-*.png
+/public/roadmap-*.png
+/public/references-section-*.png
+/public/audit-*.png
+/public/patched/
+/public/references/
+/*.png
+# contoh env tetap terlacak
+!.env.example

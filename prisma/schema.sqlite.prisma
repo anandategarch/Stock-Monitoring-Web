@@ -1,0 +1,323 @@
+// ============================================================
+// FILE DIGENERATE OTOMATIS — jangan edit manual.
+// Cermin SQLite (dev sandbox/lokal) dari kanonik prisma/schema.prisma
+// (PostgreSQL/Supabase). Edit kanonik lalu jalankan: bun run db:push
+// atau node scripts/sync-prisma-schemas.mjs.
+// ============================================================
+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "sqlite"
+  url       = env("DATABASE_URL")
+}
+
+// ---- 1 run = 1 batch (FR-5). committedAt = null ⇒ hanya pratinjau (FR-4)
+model RunBatch {
+  id                String    @id @default(cuid())
+  periodKey         String
+  bundleName        String?
+  status            String
+  definitionVersion String
+  paramsJson        String
+  summaryJson       String?
+  sourceInfoJson    String?
+  logJson           String?
+  engineKind        String    @default("demo")
+  engineVersion     String?
+  contractVersion   String?
+  durationMs        Int?
+  actor             String    @default("analyst")
+  error             String?
+  startedAt         DateTime  @default(now())
+  finishedAt        DateTime?
+  committedAt       DateTime?
+
+  snapshot   PeriodSnapshot?
+  dqIssues   DQIssue[]
+  sourceFiles SourceFile[]
+  prices     PriceHistory[]
+
+  @@index([periodKey])
+  @@index([startedAt])
+}
+
+// ---- Snapshot per periode, immutable (FR-20/24). Versi lama → SUPERSEDED, tetap tersimpan.
+model PeriodSnapshot {
+  id               String    @id @default(cuid())
+  periodKey        String
+  runBatchId       String    @unique
+  state            String    @default("ACTIVE")
+  restoCount       Int
+  itemCount        Int
+  rowCount         Int
+  dayCount         Int
+  nominalTotal     Float     @default(0)
+  deviasiQtyTotal  Float     @default(0)
+  definitionVersion String
+  paramsJson       String
+  committedAt      DateTime  @default(now())
+  committedBy      String    @default("analyst")
+  supersededAt     DateTime?
+  supersededById   String?
+
+  runBatch    RunBatch          @relation(fields: [runBatchId], references: [id])
+  rows        SnapshotRow[]
+  poHeaders   PoHeader[]
+  selisihIn   SelisihInResto[]
+  dqIssues    DQIssue[]
+
+  @@index([periodKey, state])
+  @@index([committedAt])
+}
+
+// ---- Grain: periode × resto × barang × satuan × hari (D-1). null = missing (INV-1)
+model SnapshotRow {
+  id              String  @id @default(cuid())
+  snapshotId      String
+  restoCode       String
+  restoName       String
+  itemName        String
+  satuan          String
+  kategori        String
+  isGR            Boolean
+  day             Int
+  qtySaldoAwal    Float?
+  qtySO           Float?
+  qtySaldoAkhir   Float?
+  qtyDeviasi      Float?
+  qtyIN           Float?
+  qtyBarangMasuk  Float?
+  qtyCOM          Float?
+  qtySelisihIN    Float?
+  qtyBarangKeluar Float?
+  qtyACR          Float?
+  hargaEfektif    Float?
+  konversiOk      Boolean @default(true)
+  nominal         Float?
+  cekJson         String  @default("[]")
+  auditNote       String?
+  fingerprint     String
+
+  snapshot PeriodSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId])
+  @@index([snapshotId, restoCode])
+  @@index([snapshotId, itemName])
+  @@index([fingerprint])
+}
+
+// ---- Histori harga per run (D-2/FR-23: simpan sejak Fase 1 → buka F2 dekomposisi nominal)
+model PriceHistory {
+  id             String   @id @default(cuid())
+  runBatchId     String
+  itemName       String
+  satuan         String
+  harga          Float?
+  rasioKonversi  Float?
+  konversiOk     Boolean  @default(true)
+  alasan         String?
+
+  runBatch RunBatch @relation(fields: [runBatchId], references: [id], onDelete: Cascade)
+
+  @@index([runBatchId])
+  @@unique([runBatchId, itemName, satuan])
+}
+
+// ---- Rekonsiliasi Selisih IN per resto (FR-33): IN vs BM + Hasil Audit + SKOR RESTO
+model SelisihInResto {
+  id              String  @id @default(cuid())
+  snapshotId      String
+  restoCode       String
+  restoName       String
+  inAccurate      Float
+  barangMasuk     Float
+  selisih         Float
+  hasilAudit      String
+  skorResto       Int
+  itemBerselisih  Int
+  tanggalTerdampak Int
+
+  snapshot PeriodSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId])
+  @@unique([snapshotId, restoCode])
+}
+
+// ---- Rincian PO (FR-36): header + item, status pesanan 32.43, anotasi ↳
+model PoHeader {
+  id            String  @id @default(cuid())
+  snapshotId    String
+  cabang        String
+  restoName     String
+  poNumber      String
+  tanggal       String
+  supplier      String?
+  itemCount     Int
+  status        String
+  statusPesanan String
+  annotasi      String?
+
+  snapshot PeriodSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  items    PoItem[]
+
+  @@index([snapshotId])
+  @@unique([snapshotId, poNumber])
+}
+
+model PoItem {
+  id               String  @id @default(cuid())
+  poHeaderId       String
+  itemName         String
+  qty              Float
+  satuan           String
+  status           String
+  diterimaSebagian Boolean @default(false)
+
+  poHeader PoHeader @relation(fields: [poHeaderId], references: [id], onDelete: Cascade)
+
+  @@index([poHeaderId])
+}
+
+// ---- Kualitas data (FR-60, INV-6): 10 kelas sinyal Task 31-c
+model DQIssue {
+  id         String   @id @default(cuid())
+  runBatchId String
+  snapshotId String?
+  severity   String
+  code       String
+  message    String
+  source     String?
+  sheet      String?
+  rawValue   String?
+  rowNumber  Int?
+  createdAt   DateTime @default(now())
+
+  runBatch RunBatch       @relation(fields: [runBatchId], references: [id], onDelete: Cascade)
+  snapshot PeriodSnapshot? @relation(fields: [snapshotId], references: [id])
+
+  @@index([runBatchId])
+  @@index([snapshotId])
+  @@index([code, severity])
+}
+
+// ---- Follow-Up 2.0 (FR-40..44). Fingerprint stabil TANPA cek/qty (FR-22)
+model FollowUpCase {
+  id                String    @id @default(cuid())
+  fingerprint       String
+  restoCode         String
+  restoName         String
+  itemName          String
+  satuan            String
+  kategori          String
+  status            String    @default("PENDING")
+  pic               String?
+  periodFirstSeen   String
+  currentPeriodKey  String?
+  currentQtyDeviasi Float?
+  currentNominal     Float?
+  currentHarga      Float?
+  note              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  closedAt          DateTime?
+
+  events FollowUpEvent[]
+
+  @@index([status])
+  @@index([fingerprint])
+  @@index([restoCode])
+  @@index([periodFirstSeen])
+}
+
+// ---- Timeline perubahan status (FR-41): siapa · kapan · status · alasan · qty temuan
+model FollowUpEvent {
+  id               String   @id @default(cuid())
+  caseId           String
+  actor            String   @default("analyst")
+  fromStatus       String
+  toStatus         String
+  alasan           String?
+  kategoriTindakan String?
+  qtyTemuan        Float?
+  createdAt        DateTime @default(now())
+
+  case FollowUpCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
+}
+
+// ---- PIC per outlet (FR-42; dropdown + teks bebas)
+model OutletPIC {
+  id        String   @id @default(cuid())
+  outletCode String
+  picName   String
+  waNumber  String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([outletCode, picName])
+  @@index([outletCode])
+}
+
+// ---- Replika config.json desktop + preferensi (FR-2/FR-80). valueJson.
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  valueJson String
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}
+
+// ---- Jejak audit semua aksi tulis (NFR-4)
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String
+  entity     String
+  entityId   String?
+  detailJson String?
+  actor      String   @default("analyst")
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+}
+
+// ---- Manifest file sumber per run (FR-1 pratinjau per folder)
+model SourceFile {
+  id         String   @id @default(cuid())
+  runBatchId String
+  folderKey  String
+  fileName   String
+  sheetName  String?
+  rowCount   Int?
+  sizeBytes  Int?
+  status     String   @default("OK")
+
+  runBatch RunBatch @relation(fields: [runBatchId], references: [id], onDelete: Cascade)
+
+  @@index([runBatchId])
+}
+
+// ---- DISEDIKAN Fase 5 (FR-50..52) — rekonsiliasi transfer 42.15 kedua sisi. Belum dipakai.
+model TransferLedger4215 {
+  id            String   @id @default(cuid())
+  runBatchId    String
+  snapshotId    String?
+  tanggal       String
+  itemName      String
+  satuan        String?
+  qty           Float
+  asalCode      String
+  tujuanCode    String
+  matchStatus   String   @default("UNMATCHED")
+  matchedWithId String?
+  createdAt      DateTime @default(now())
+
+  @@index([runBatchId])
+  @@index([snapshotId])
+}

@@ -1,0 +1,11 @@
+{
+  "name": "sm-fastapi-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SM-WEB Engine PRODUKSI — FastAPI membungkus pipeline Stock-Monitoring v3.9.71 apa adanya (0-rewrite, FR-10). Kontrak: docs/ENGINE-CONTRACT.md v1. Port 3031.",
+  "scripts": {
+    "dev": "python3 -m uvicorn app:app --host 0.0.0.0 --port 3031 --reload --app-dir .",
+    "start": "python3 -m uvicorn app:app --host 0.0.0.0 --port 3031 --app-dir .",
+    "golden": "python3 golden_check.py"
+  }
+}

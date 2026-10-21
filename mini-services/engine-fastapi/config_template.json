@@ -1,0 +1,42 @@
+{
+  "_comment": "SM-WEB engine produksi — template konfigurasi run (FR-2: pemetaan folder/sheet SAMA PERSIS dengan config.json desktop v3.9.71). RootPath diisi per-request dengan direktori bundle; key ini TIDAK dipakai dari template. KategoriBarang4217 = whitelist kategori saldo awal 42.17.",
+  "RootPath": "",
+  "Folders": {
+    "RekapBerjalan": "1. DEVIASI WEEKLY",
+    "RekapLalu": "1.12 Rekap Mentah Bulan Lalu",
+    "Penjualan2205": "2. 22.05",
+    "Kirim4215": "3.1 42.15 Kirim",
+    "Terima4215": "3. 42.15",
+    "RI3224": "13. 32.24 RI",
+    "RI3224Lalu": "13.2 3224 RI Bulan Lalu",
+    "SaldoAwal4217": "6.1 42.17 Saldo Awal",
+    "DBSKategori": "21. DBS Kategori",
+    "Pemindahan4205": "4. 42.05",
+    "Pemindahan4205Lalu": "4.1 4205 Bulan Lalu",
+    "RincianPO": "25. Rincian PO",
+    "Data9901": "30. 9901",
+    "Harga": "09.Harga"
+  },
+  "Sheets": {
+    "RekapMentah": "REKAP MENTAH",
+    "Penjualan2205": "#22.05. Rincian Penjualan per B",
+    "Pemindahan4215": "#42.15. Pemindahan Barang (KIRI",
+    "Penerimaan3224": "#32.24. Rincian Penerimaan Bara",
+    "SaldoAwal4217": "#42.17. Kuantitas Barang per Gu",
+    "FakturPembelian": "#32.42. Rincian Faktur Pembelia",
+    "KonversiSatuan": "Sheet1",
+    "DBSKategori": "Sheet1",
+    "Pemindahan4205": "#42.05. Rincian Pemindahan Bara",
+    "PesananPO": "#32.43. Rincian Pesanan Pembeli"
+  },
+  "KategoriBarang4217": [
+    "00.COST",
+    "01.COST - PACKAGING V.2",
+    "01. COST - PACKAGING - TIDAK BOLEH",
+    "10.FOOD [BUMBU] - COM V.2",
+    "10.FOOD [RM] - COM V.2",
+    "10.FOOD [WIP] - COM V.2",
+    "10.FOOD [RM] - COM- TIDAK BOLEH",
+    "10.FOOD [WIP] - COM TIDAK BOLEH"
+  ]
+}
