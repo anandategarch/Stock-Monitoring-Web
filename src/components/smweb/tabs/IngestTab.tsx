@@ -504,8 +504,10 @@ export function IngestTab() {
                   disimpan &amp; bundle bisa ditarik (maks ±60 dtk &amp; kuota disk sementara), tetapi{" "}
                   <strong>Proses Bundle data asli di server ini</strong> tidak bisa dijalankan.
                   Solusi tanpa batas serverless: <strong>Proses via Python di Laptop</strong> di
-                  seksi bawah — laptop memproses, hasil tampil &amp; dikomit di sini; atau jalankan
-                  penuh dari instalasi lokal (sandbox/PC) tempat engine :3031 hidup.
+                  seksi bawah — di laptop cukup <strong>dobel-klik <code className="text-[11px]">mulai-laptop.bat</code></strong>
+                  (repo), lalu kirim folder dari sini: laptop memproses, hasil tampil &amp; dikomit
+                  di sini; atau jalankan penuh dari instalasi lokal (sandbox/PC) tempat engine
+                  :3031 hidup.
                 </span>
               </p>
             )}
@@ -664,8 +666,10 @@ export function IngestTab() {
                   engine FastAPI secara lokal</strong> — bebas batas 60 dtk/kuota serverless — lalu
                   hasilnya diunggah dan <strong>tampil di web ini</strong> (pratinjau + Komit di
                   sini juga). Memakai link Drive yang dicentang di atas + parameter run di form
-                  bawah. Syarat: laptop menyala &amp; agent berjalan (panduan:{" "}
-                  <code className="text-[11px]">docs/AGENT-LOCAL.md</code>).
+                  bawah. Di laptop: <strong>dobel-klik <code className="text-[11px]">mulai-laptop.bat</code></strong>
+                  dari repo (Windows; <code className="text-[11px]">mulai-laptop.command</code> di
+                  macOS) — engine + agent nyala otomatis sekali klik, token ditanya sekali
+                  (panduan: <code className="text-[11px]">docs/AGENT-LOCAL.md</code>).
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0" aria-live="polite">
