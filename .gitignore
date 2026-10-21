@@ -87,3 +87,6 @@ db/*.db
 /*.png
 # contoh env tetap terlacak
 !.env.example
+
+# Folder kerja sementara agent lokal (Task 51)
+/agent/smweb-agent-work/
