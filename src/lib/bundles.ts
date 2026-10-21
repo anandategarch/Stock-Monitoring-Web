@@ -7,7 +7,14 @@ import { promises as fs } from "fs";
 import path from "path";
 import type { BundleFolderStat, BundleManifest } from "@/lib/types";
 
-export const BUNDLES_DIR = path.join(process.cwd(), "bundles");
+// Direktori penyimpanan bundle. Di Vercel (serverless) hanya /tmp yang bisa
+// ditulis — cwd lambda READ-ONLY; tanpa ini unggah bundle 500 EACCES (hanya
+// terjadi di serverless; lokal/sandbox tetap memakai ./bundles). Bundle di
+// /tmp bersifat efemeral: manifest pratinjau tetap berfungsi, komit ulang
+// (FR-12) pada lambda berikutnya akan jujur meminta unggah ulang.
+export const BUNDLES_DIR = process.env.VERCEL
+  ? path.join("/tmp", "smweb-bundles")
+  : path.join(process.cwd(), "bundles");
 
 /** Pemetaan folder kunci config.json — IDENTIK desktop v3.9.71 (FR-2). */
 export const FOLDER_TEMPLATE: { folderKey: string; folderName: string }[] = [
