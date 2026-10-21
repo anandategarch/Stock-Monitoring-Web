@@ -1,0 +1,123 @@
+// ============================================================
+// ingest-bundle.ts — SATU jalur materialisasi bundle (FR-1/FR-2)
+// untuk SEMUA sumber: unggah ZIP, pilih folder (auto-ZIP browser),
+// dan tarik Google Drive. Writer meng-ekstrak aturan yang tadinya
+// hidup di route upload: sanitasi path (anti traversal/__MACOSX/._),
+// filter .xls*, tulis ke bundles/{bundleId}/, statistik folder
+// kanonik computeFolderStats(), lalu manifest via saveBundleMeta().
+// ============================================================
+import "server-only";
+import { promises as fs } from "fs";
+import path from "path";
+import { bundleDir, computeFolderStats, saveBundleMeta } from "@/lib/bundles";
+import type { BundleManifest } from "@/lib/types";
+
+const EXCEL_RE = /\.(xlsx|xls|xlsb)$/i;
+
+export class BundleEmptyError extends Error {
+  constructor() {
+    super(
+      "Tidak ada file Excel (.xlsx/.xls/.xlsb) di dalam bundle — pastikan ini bundle export Accurate (struktur 14 folder config.json).",
+    );
+    this.name = "BundleEmptyError";
+  }
+}
+
+export type BundleWriter = {
+  /** Tulis satu entri (path relatif di dalam bundle). Entri tidak aman
+   *  (traversal/absolut/__MACOSX/._x/non-Excel) dilewati & dihitung. */
+  write(relPath: string, data: Uint8Array): Promise<void>;
+  /** Selesaikan bundle: manifest FR-2 + meta JSON. Lempar BundleEmptyError
+   *  bila tidak ada satu pun file Excel yang tertulis. */
+  finish(meta: {
+    name: string;
+    source?: "upload" | "drive";
+    skippedEntriesExtra?: number;
+    extras?: Pick<
+      BundleManifest,
+      "skippedDuplicates" | "suffixedDuplicates" | "driveFolders" | "skippedFiles"
+    >;
+  }): Promise<BundleManifest>;
+  /** Buang bundle yang setengah jadi (folder + seluruh isinya). */
+  abort(): Promise<void>;
+};
+
+export async function createBundleWriter(bundleId: string): Promise<BundleWriter> {
+  const dir = bundleDir(bundleId); // validasi bundleId sekali di sini
+  await fs.mkdir(dir, { recursive: true });
+
+  let fileCount = 0;
+  let totalBytes = 0;
+  let skippedEntries = 0;
+  const excelEntries: { path: string; bytes: number }[] = [];
+  let aborted = false;
+
+  const checkAborted = () => {
+    if (aborted) throw new Error("Writer sudah di-abort.");
+  };
+
+  return {
+    async write(relPath: string, data: Uint8Array): Promise<void> {
+      checkAborted();
+      if (relPath.endsWith("/")) return; // entri direktori
+      if (
+        relPath.startsWith("__MACOSX/") ||
+        relPath.includes("/__MACOSX/") ||
+        path.basename(relPath).startsWith("._")
+      ) {
+        skippedEntries += 1;
+        return;
+      }
+      // sanitasi path: larang traversal / absolut (identik route upload lama)
+      const norm = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, "");
+      if (!norm || path.isAbsolute(norm) || norm.startsWith("..") || norm.includes("\0")) {
+        skippedEntries += 1;
+        return;
+      }
+      if (!EXCEL_RE.test(norm)) {
+        skippedEntries += 1; // non-Excel dilewati (bundle = folder export .xls*)
+        return;
+      }
+      const dest = path.join(dir, norm);
+      if (!dest.startsWith(dir + path.sep)) {
+        skippedEntries += 1;
+        return;
+      }
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.writeFile(dest, data);
+      fileCount += 1;
+      totalBytes += data.byteLength;
+      excelEntries.push({ path: norm, bytes: data.byteLength });
+    },
+
+    async finish(meta): Promise<BundleManifest> {
+      checkAborted();
+      if (fileCount === 0) {
+        throw new BundleEmptyError();
+      }
+      const { folders, missingFolders } = computeFolderStats(excelEntries);
+      const manifest: BundleManifest = {
+        bundleId,
+        name: meta.name,
+        uploadedAt: new Date().toISOString(),
+        fileCount,
+        totalBytes,
+        skippedEntries: skippedEntries + (meta.skippedEntriesExtra ?? 0),
+        folders,
+        missingFolders,
+        ...(meta.source ? { source: meta.source } : {}),
+        ...(meta.extras?.skippedDuplicates ? { skippedDuplicates: meta.extras.skippedDuplicates } : {}),
+        ...(meta.extras?.suffixedDuplicates ? { suffixedDuplicates: meta.extras.suffixedDuplicates } : {}),
+        ...(meta.extras?.driveFolders ? { driveFolders: meta.extras.driveFolders } : {}),
+        ...(meta.extras?.skippedFiles ? { skippedFiles: meta.extras.skippedFiles } : {}),
+      };
+      await saveBundleMeta(manifest);
+      return manifest;
+    },
+
+    async abort(): Promise<void> {
+      aborted = true;
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    },
+  };
+}

@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
-  AuditLogDto, BundleManifest, CreateCaseRequest, DrilldownResponse, DqIssueDto, EngineHealth,
+  AuditLogDto, BundleManifest, CreateCaseRequest, DrilldownResponse, DriveFolderLinkDto, DqIssueDto, EngineHealth,
   FollowUpCaseDto, FollowUpEventDto, IngestCommitResponse, IngestProcessResponse,
   LaporanResponse, NominalResponse, OutletPICDto, OverviewResponse, PivotResponse,
   PoResponse, RunDetail, RunSummary, SelisihInResponse, SettingsDto, SnapshotSummary,
@@ -34,6 +34,7 @@ export const qk = {
   settings: ["settings"] as const,
   engineHealth: ["engine-health"] as const,
   audit: (limit: number) => ["audit", limit] as const,
+  driveLinks: ["drive-links"] as const,
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -240,6 +241,56 @@ export function useIngestProcess() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => invalidateAll(),
+  });
+}
+
+// ---------- Google Drive (FR-1: tarik tanpa ZIP manual) ----------
+
+/** Daftar link folder Drive tersimpan — "biar ingat". */
+export function useDriveLinks() {
+  return useQuery({
+    queryKey: qk.driveLinks,
+    queryFn: () => fetchJson<{ links: DriveFolderLinkDto[] }>("/api/ingest/drive"),
+  });
+}
+
+/** Simpan + cek link folder Drive (listing langsung oleh server). */
+export function useDriveSaveLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (url: string) =>
+      fetchJson<{ link: DriveFolderLinkDto; created: boolean; warnings: string[] }>(
+        "/api/ingest/drive",
+        { method: "POST", body: JSON.stringify({ action: "save", url }) },
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.driveLinks }),
+  });
+}
+
+/** Tarik file Excel dari link tersimpan → bundle (respons = manifest, sama
+ *  dengan unggah ZIP — alur pratinjau/komit lanjutan identik). */
+export function useDrivePull() {
+  return useMutation({
+    mutationFn: (vars: { ids?: string[]; url?: string }) =>
+      fetchJson<BundleManifest>("/api/ingest/drive", {
+        method: "POST",
+        body: JSON.stringify({ action: "process", ...vars }),
+      }),
+  });
+}
+
+/** Hapus link tersimpan (file di Drive tidak tersentuh). */
+export function useDriveDeleteLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchJson<{ ok: boolean; id: string }>(`/api/ingest/drive?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      toast.success("Link Drive dihapus.");
+      void qc.invalidateQueries({ queryKey: qk.driveLinks });
+    },
   });
 }
 

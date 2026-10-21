@@ -48,6 +48,20 @@ masuk jalur unggah yang sama dengan ZIP manual (satu jalur validasi manifest FR-
 400 MB; folder induk/pembungkus otomatis dinormalisasi). Tombol **Pilih ZIP…** tetap
 tersedia untuk `.zip` yang sudah jadi.
 
+**Ambil dari Google Drive (FR-1, tanpa unduh & ZIP manual)**: bagian *Ambil dari Google
+Drive* pada tab Proses & Ingest — tempel link folder Drive (satu link per folder export,
+mis. `1. DEVIASI WEEKLY`), klik **Simpan Link** (listing diperiksa langsung; judul folder
+yang cocok config.json otomatis dipetakan ke folderKey kanonik), lalu centang dan klik
+**Tarik N Folder → Bundle**: server men-unduh file Excel langsung dari Drive
+(`embeddedfolderview` listing + `uc?export=download`, magic bytes Excel diverifikasi)
+dan mematerialisasinya lewat `createBundleWriter` — SATU jalur validasi/manifest dengan
+ZIP (FR-2). Link tersimpan di tabel `DriveFolderLink` ("biar ingat"). Perilaku jujur:
+file Drive bernama sama → versi **terbaru** menang (lama dilaporkan di manifest); file
+rusak/bukan Excel → dilewati + dilaporkan (konsisten kelas DQ SKIP_FILE); folder harus
+dibagikan "Siapa saja yang memiliki link · Viewer". Batas: 400 MB total, 60 MB/file,
+200 file, 12 subfolder per folder. Di Vercel berlaku `maxDuration` 60 dtk — folder sangat
+besar lebih baik ditarik dari self-host/lokal.
+
 ---
 
 ## 2. Menjalankan lokal (SQLite, tanpa Postgres)

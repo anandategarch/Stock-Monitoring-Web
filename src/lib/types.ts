@@ -323,6 +323,29 @@ export interface BundleManifest {
   skippedEntries: number;
   folders: BundleFolderStat[];
   missingFolders: string[];
+  /** Asal bundle: "drive" = ditarik langsung dari Google Drive (opsional). */
+  source?: "upload" | "drive";
+  /** File Drive bernama sama yang DILEWATI (versi terbaru menang, jujur dilaporkan). */
+  skippedDuplicates?: { path: string; reason: string }[];
+  /** File Drive bernama sama yang DIPERTAHANKAN SEMUANYA (tanpa tanggal → akhiran __2 dst.). */
+  suffixedDuplicates?: string[];
+  /** Rincian per folder Drive yang ditarik (hanya sumber drive). */
+  driveFolders?: { folderName: string; folderKey: string | null; fileCount: number }[];
+  /** File Drive yang DILEWATI saat ditarik (rusak/bukan Excel/0 byte) — jujur. */
+  skippedFiles?: { path: string; reason: string }[];
+}
+
+/** Link folder Google Drive tersimpan — "biar ingat" (FR-1). */
+export interface DriveFolderLinkDto {
+  id: string;
+  url: string;
+  folderId: string;
+  folderName: string;
+  folderKey: string | null;
+  fileCount: number;
+  lastCheckedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
 }
 
 export interface IngestCommitResponse {

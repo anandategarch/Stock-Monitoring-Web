@@ -7,10 +7,11 @@
 
 import { useRef, useState, type InputHTMLAttributes } from "react";
 import {
-  AlertTriangle, CheckCircle2, Database, FileWarning, FolderOpen, FolderTree,
-  Loader2, PackageOpen, Play, Rocket, Save, UploadCloud, XCircle,
+  AlertTriangle, CheckCircle2, Cloud, CloudDownload, Database, FileWarning, FolderOpen, FolderTree,
+  Loader2, PackageOpen, Play, Rocket, Save, Trash2, UploadCloud, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,7 +21,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns } from "@/hooks/use-sm-api";
+import {
+  useDriveDeleteLink, useDriveLinks, useDrivePull, useDriveSaveLink,
+  useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns,
+} from "@/hooks/use-sm-api";
 import { collectExcelFromFolder, MAX_FOLDER_BYTES, zipPickedFolder } from "@/lib/folder-pick";
 import type { BundleManifest } from "@/lib/types";
 import { useSmStore } from "@/store/use-sm-store";
@@ -51,20 +55,30 @@ export function IngestTab() {
   const [folderStage, setFolderStage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const [driveUrl, setDriveUrl] = useState("");
+  const [driveInclude, setDriveInclude] = useState<Record<string, boolean>>({});
 
   const process = useIngestProcess();
   const commit = useIngestCommit();
   const upload = useIngestUpload();
+  const driveLinksQuery = useDriveLinks();
+  const driveSave = useDriveSaveLink();
+  const drivePull = useDrivePull();
+  const driveDelete = useDriveDeleteLink();
+  const driveLinks = driveLinksQuery.data?.links ?? [];
+  const includedDriveIds = driveLinks
+    .filter((l) => driveInclude[l.id] !== false)
+    .map((l) => l.id);
   const { data: runsData, isPending: runsPending } = useRuns();
   const runList = runsData?.runs ?? [];
   const { data: detail, isPending: detailPending } = useRunDetail(selectedRunId);
 
-  const applyManifest = (out: BundleManifest) => {
+  const applyManifest = (out: BundleManifest, verb = "terunggah") => {
     setManifest(out);
     setBundleName(out.name);
     const missing = out.missingFolders.length;
     toast.success(
-      `Bundle "${out.name}" terunggah: ${out.fileCount} file Excel · ${out.folders.length - missing}/${out.folders.length} folder dikenali${missing ? ` · ${missing} folder kosong/tdak ada` : ""}.`,
+      `Bundle "${out.name}" ${verb}: ${out.fileCount} file Excel · ${out.folders.length - missing}/${out.folders.length} folder dikenali${missing ? ` · ${missing} folder kosong/tdak ada` : ""}.`,
     );
   };
 
@@ -75,7 +89,7 @@ export function IngestTab() {
       return;
     }
     upload.mutate(file, {
-      onSuccess: applyManifest,
+      onSuccess: (out) => applyManifest(out),
       onError: (err) => toast.error(err instanceof Error ? err.message : "Unggah gagal."),
     });
   };
@@ -108,7 +122,7 @@ export function IngestTab() {
         setFolderStage(done === total ? "Membungkus ZIP…" : `Membaca file ${done}/${total}…`);
       });
       upload.mutate(zip, {
-        onSuccess: applyManifest,
+        onSuccess: (out) => applyManifest(out),
         onError: (err) => toast.error(err instanceof Error ? err.message : "Unggah gagal."),
       });
     } catch (err) {
@@ -116,6 +130,41 @@ export function IngestTab() {
     } finally {
       setFolderStage(null);
     }
+  };
+
+  // Google Drive: simpan link folder (dicek langsung oleh server), lalu tarik
+  // file Excel-nya menjadi bundle — jalur validasi/manifest SAMA dengan ZIP
+  // (FR-2); link tersimpan di database supaya diingat (“biar ingat”).
+  const onDriveSave = () => {
+    const u = driveUrl.trim();
+    if (!u) {
+      toast.error("Tempel link folder Drive dulu (drive.google.com/drive/folders/…).");
+      return;
+    }
+    driveSave.mutate(u, {
+      onSuccess: (out) => {
+        toast.success(
+          `Link tersimpan: folder “${out.link.folderName}”${out.link.folderKey ? ` — dikenali sebagai ${out.link.folderKey}` : " — nama TIDAK cocok template"} · ${out.link.fileCount} file Excel.`,
+        );
+        for (const w of out.warnings) toast.warning(w);
+        setDriveUrl("");
+      },
+      onError: (err) => toast.error(err instanceof Error ? err.message : "Gagal memeriksa link Drive."),
+    });
+  };
+
+  const onDrivePull = () => {
+    if (includedDriveIds.length === 0) {
+      toast.error("Centang minimal satu link Drive yang mau ditarik.");
+      return;
+    }
+    drivePull.mutate(
+      { ids: includedDriveIds },
+      {
+        onSuccess: (out) => applyManifest(out, "ditarik dari Drive"),
+        onError: (err) => toast.error(err instanceof Error ? err.message : "Gagal menarik dari Drive."),
+      },
+    );
   };
 
   const onProcess = () => {
@@ -170,9 +219,9 @@ export function IngestTab() {
         </h2>
         <p className="text-sm text-muted-foreground mt-1">
           Jalankan pipeline atas bundle export Accurate. Mode <strong>produksi</strong> memakai engine
-          FastAPI yang membungkus pipeline asli v3.9.71 apa adanya (0-rewrite, FR-10) — pilih
-          <strong> folder export langsung</strong> (ZIP dibuat otomatis di browser, tanpa zip manual)
-          atau unggah ZIP bundle; mode <strong>demo</strong> memakai data sintetis deterministik. Hasil run menjadi{" "}
+          FastAPI yang membungkus pipeline asli v3.9.71 apa adanya (0-rewrite, FR-10) — pilih{" "}
+          <strong>folder export langsung</strong> (ZIP otomatis di browser), tarik lewat{" "}
+          <strong>link Google Drive</strong>, atau unggah ZIP bundle; mode <strong>demo</strong> memakai data sintetis deterministik. Hasil run menjadi{" "}
           <strong>pratinjau</strong> — snapshot periode hanya tersimpan setelah kamu menekan{" "}
           <strong>Komit</strong> (FR-4: tidak pernah menimpa snapshot lama diam-diam).
         </p>
@@ -214,7 +263,7 @@ export function IngestTab() {
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Engine FastAPI :3031 — pipeline asli v3.9.71 atas bundle export Accurate kamu
-                (pilih folder langsung / unggah ZIP 14 folder, FR-1).
+                (pilih folder langsung / Google Drive / unggah ZIP 14 folder, FR-1).
               </p>
             </div>
           </div>
@@ -230,9 +279,9 @@ export function IngestTab() {
                 <UploadCloud className="h-4 w-4" aria-hidden /> Unggah bundle export Accurate
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                <strong>Pilih folder</strong> export langsung dari komputer — file Excel di dalamnya
-                dibungkus ZIP otomatis di browser (tanpa zip manual); atau pilih file{" "}
-                <strong>.zip</strong> yang sudah ada. Isi: 14 folder sesuai config.json
+                Tiga cara: <strong>pilih folder</strong> export langsung dari komputer (ZIP otomatis
+                di browser), <strong>link Google Drive</strong> (bagian bawah — tanpa unduh manual),
+                atau file <strong>.zip</strong> yang sudah ada. Isi: 14 folder sesuai config.json
                 (2. 22.05 · 4. 42.05 · dst.) — batas 400 MB. Struktur divalidasi per folder;
                 folder kosong dilaporkan jujur (tetap bisa diproses).
               </p>
@@ -301,6 +350,118 @@ export function IngestTab() {
             </p>
           )}
 
+          {/* Sumber Google Drive — link tersimpan “biar ingat” (FR-1) */}
+          <div className="border-t pt-3 space-y-3">
+            <div>
+              <p className="text-sm font-medium flex items-center gap-2">
+                <Cloud className="h-4 w-4" aria-hidden /> Ambil dari Google Drive — tanpa unduh &amp; ZIP manual
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Tempel link folder Drive (satu link per folder export, mis. “1. DEVIASI WEEKLY”) —
+                server yang menarik file Excel-nya langsung, lalu memvalidasi lewat jalur yang sama
+                dengan ZIP (FR-2). Syarat: folder dibagikan “Siapa saja yang memiliki link · Viewer”.
+                Link tersimpan di sini supaya diingat — centang lalu Tarik.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                className="flex-1 min-w-64"
+                placeholder="https://drive.google.com/drive/folders/…"
+                value={driveUrl}
+                onChange={(e) => setDriveUrl(e.target.value)}
+                inputMode="url"
+                aria-label="Link folder Google Drive"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onDriveSave();
+                }}
+              />
+              <Button variant="outline" onClick={onDriveSave} disabled={driveSave.isPending} className="gap-2">
+                {driveSave.isPending ? (
+                  <>Memeriksa…</>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4" aria-hidden /> Simpan Link
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {driveLinksQuery.isPending ? (
+              <Skeleton className="h-12" />
+            ) : driveLinks.length > 0 ? (
+              <div className="space-y-2">
+                <div className="max-h-48 overflow-y-auto nice-scroll rounded-lg border divide-y">
+                  {driveLinks.map((l) => {
+                    const checked = driveInclude[l.id] !== false;
+                    return (
+                      <div key={l.id} className="flex items-center gap-3 px-3 py-2">
+                        <Checkbox
+                          id={`drive-${l.id}`}
+                          checked={checked}
+                          onCheckedChange={(v) =>
+                            setDriveInclude((prev) => ({ ...prev, [l.id]: v === true }))
+                          }
+                          aria-label={`Ikut sertakan folder ${l.folderName}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">{l.folderName}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {l.fileCount} file Excel
+                            {l.lastUsedAt ? ` · terakhir ditarik ${fmtDateTime(l.lastUsedAt)}` : ""}
+                          </p>
+                        </div>
+                        {l.folderKey ? (
+                          <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">
+                            {l.folderKey}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300">
+                            TIDAK DIKENALI
+                          </Badge>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600"
+                          onClick={() => driveDelete.mutate(l.id)}
+                          disabled={driveDelete.isPending}
+                          aria-label={`Hapus link ${l.folderName}`}
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    onClick={onDrivePull}
+                    disabled={drivePull.isPending || includedDriveIds.length === 0}
+                    className="gap-2"
+                  >
+                    {drivePull.isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Menarik{" "}
+                        {includedDriveIds.length} folder dari Drive…
+                      </>
+                    ) : (
+                      <>
+                        <CloudDownload className="h-4 w-4" aria-hidden /> Tarik {includedDriveIds.length} Folder → Bundle
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Manifest muncul di bawah — lanjutkan dengan “Proses Bundle” seperti biasa.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Belum ada link tersimpan — tempel link folder Drive pertamamu di atas.
+              </p>
+            )}
+          </div>
+
           {manifest ? (
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">
@@ -313,6 +474,32 @@ export function IngestTab() {
                   <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
                   Folder tak ditemukan: {manifest.missingFolders.join(", ")} — engine preflight akan
                   mencatat peringatan; folder Terima4215 memang tidak dibaca desktop v3.9.71.
+                </p>
+              )}
+              {manifest.source === "drive" && manifest.driveFolders && manifest.driveFolders.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Ditarik dari Drive: {manifest.driveFolders.map((f) => `${f.folderName} (${f.fileCount})`).join(" · ")}
+                </p>
+              )}
+              {manifest.skippedDuplicates && manifest.skippedDuplicates.length > 0 && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                  {manifest.skippedDuplicates.length} file Drive bernama sama dilewati (versi TERBARU menang):{" "}
+                  {manifest.skippedDuplicates.map((d) => d.path).join(", ")}.
+                </p>
+              )}
+              {manifest.suffixedDuplicates && manifest.suffixedDuplicates.length > 0 && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                  {manifest.suffixedDuplicates.length} file duplikat ditulis dengan akhiran __2 dst.:{" "}
+                  {manifest.suffixedDuplicates.join(", ")}.
+                </p>
+              )}
+              {manifest.skippedFiles && manifest.skippedFiles.length > 0 && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                  {manifest.skippedFiles.length} file Drive DILEWATI karena rusak/bukan Excel (cek folder Drive-nya):{" "}
+                  {manifest.skippedFiles.map((d) => d.path).join(", ")}.
                 </p>
               )}
               <ScrollArea className="h-48 nice-scroll rounded-lg border">

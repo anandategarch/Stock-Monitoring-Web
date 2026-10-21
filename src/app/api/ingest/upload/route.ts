@@ -1,24 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { promises as fs } from "fs";
-import path from "path";
 import { unzipSync } from "fflate";
-import { BUNDLES_DIR, FOLDER_TEMPLATE, bundleDir, computeFolderStats, saveBundleMeta } from "@/lib/bundles";
-import type { BundleManifest } from "@/lib/types";
+import { BundleEmptyError, createBundleWriter } from "@/lib/ingest-bundle";
+import { BUNDLES_DIR, FOLDER_TEMPLATE } from "@/lib/bundles";
+import path from "path";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const MAX_ZIP_BYTES = 400 * 1024 * 1024; // R-10: batas jelas di FR-1
-const EXCEL_RE = /\.(xlsx|xls|xlsb)$/i;
 
 /**
  * POST /api/ingest/upload (FR-1) — unggah ZIP bundle export mentah Accurate.
- * Validasi struktur: entri .xls* saja (lainnya dilewati & dihitung), path
- * aman (tanpa ../ dan __MACOSX), lalu manifest per-folder memakai pemetaan
- * config.json desktop (FR-2 — 14 kunci folder kanonik). Folder yang tak
- * ditemukan dilaporkan jujur (missingFolders) — pipeline tetap dapat
- * dijalankan dan preflight engine akan memberi peringatan yang sama.
+ * Ekstraksi + validasi + manifest kini lewat createBundleWriter (SATU jalur
+ * bersama dengan sumber Google Drive): entri .xls* saja (lainnya dilewati
+ * & dihitung), path aman (tanpa ../ dan __MACOSX), lalu manifest per-folder
+ * memakai pemetaan config.json desktop (FR-2 — 14 kunci folder kanonik).
+ * Folder yang tak ditemukan dilaporkan jujur (missingFolders) — pipeline
+ * tetap dapat dijalankan dan preflight engine akan memberi peringatan sama.
  */
 export async function POST(req: NextRequest) {
   let file: File;
@@ -43,81 +42,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const bundleId = randomUUID();
-  const dir = bundleDir(bundleId);
+  let entries: Record<string, Uint8Array>;
   try {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    let entries: Record<string, Uint8Array>;
-    try {
-      entries = unzipSync(buf);
-    } catch {
-      return NextResponse.json({ error: "ZIP tidak dapat dibaca (rusak atau bukan zip)." }, { status: 422 });
-    }
+    entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+  } catch {
+    return NextResponse.json({ error: "ZIP tidak dapat dibaca (rusak atau bukan zip)." }, { status: 422 });
+  }
 
-    let fileCount = 0;
-    let totalBytes = 0;
-    let skippedEntries = 0;
-    const excelEntries: { path: string; bytes: number }[] = [];
-
-    await fs.mkdir(dir, { recursive: true });
-
+  const writer = await createBundleWriter(randomUUID());
+  try {
     for (const [name, data] of Object.entries(entries)) {
-      if (name.endsWith("/")) continue; // entri direktori
-      if (name.startsWith("__MACOSX/") || name.includes("/__MACOSX/") || path.basename(name).startsWith("._")) {
-        skippedEntries += 1;
-        continue;
-      }
-      // sanitasi path: larang traversal / absolut
-      const norm = path.normalize(name).replace(/^(\.\.(\/|\\|$))+/, "");
-      if (!norm || path.isAbsolute(norm) || norm.startsWith("..") || norm.includes("\0")) {
-        skippedEntries += 1;
-        continue;
-      }
-      if (!EXCEL_RE.test(norm)) {
-        skippedEntries += 1; // non-Excel dilewati (bundle = folder export .xls*)
-        continue;
-      }
-      const dest = path.join(dir, norm);
-      if (!dest.startsWith(dir + path.sep)) {
-        skippedEntries += 1;
-        continue;
-      }
-      await fs.mkdir(path.dirname(dest), { recursive: true });
-      await fs.writeFile(dest, data);
-      fileCount += 1;
-      totalBytes += data.byteLength;
-      excelEntries.push({ path: norm, bytes: data.byteLength });
+      await writer.write(name, data);
     }
-
-    if (fileCount === 0) {
-      await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-      return NextResponse.json(
-        {
-          error:
-            "Tidak ada file Excel (.xlsx/.xls/.xlsb) di dalam ZIP — pastikan ini bundle export Accurate (struktur 14 folder config.json).",
-        },
-        { status: 422 },
-      );
-    }
-
-    // FR-2 + konsistensi engine: statistik per folder kanonik, dengan
-    // normalisasi SATU folder pembungkus (lihat computeFolderStats).
-    const { folders, missingFolders } = computeFolderStats(excelEntries);
-    const manifest: BundleManifest = {
-      bundleId,
-      name: file.name.replace(/\.zip$/i, ""),
-      uploadedAt: new Date().toISOString(),
-      fileCount,
-      totalBytes,
-      skippedEntries,
-      folders,
-      missingFolders,
-    };
-    await saveBundleMeta(manifest);
-
+    const manifest = await writer.finish({ name: file.name.replace(/\.zip$/i, "") });
     return NextResponse.json(manifest);
   } catch (err) {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    await writer.abort();
+    if (err instanceof BundleEmptyError) {
+      return NextResponse.json({ error: err.message }, { status: 422 });
+    }
     const message = err instanceof Error ? err.message : "Gagal mengekstrak bundle.";
     return NextResponse.json({ error: message }, { status: 500 });
   }

@@ -303,6 +303,25 @@ model SourceFile {
   @@index([runBatchId])
 }
 
+// ---- Sumber folder Google Drive tersimpan (FR-1: ingest tanpa ZIP manual).
+// Satu baris = satu folder Drive publik ("siapa saja dengan link · Viewer").
+// folderKey terisi bila JUDUL folder cocok template config.json (FR-2) —
+// file ditarik langsung oleh server, path dibingkai nama folder kanonik.
+model DriveFolderLink {
+  id            String    @id @default(cuid())
+  url           String    @unique // bentuk kanonik drive.google.com/drive/folders/{id}
+  folderId      String
+  folderName    String
+  folderKey     String?
+  fileCount     Int       @default(0)
+  totalBytes    Int       @default(0)
+  lastCheckedAt DateTime?
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([folderKey])
+}
+
 // ---- DISEDIKAN Fase 5 (FR-50..52) — rekonsiliasi transfer 42.15 kedua sisi. Belum dipakai.
 model TransferLedger4215 {
   id            String   @id @default(cuid())
