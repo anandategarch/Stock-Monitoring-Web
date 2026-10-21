@@ -51,6 +51,14 @@ export async function engineProcess(
     if (engineUrl === undefined && embedFallbackEnabled()) {
       return embeddedDemoProcess(req);
     }
+    // Serverless (Vercel): engine FastAPI memang TIDAK ADA di sana — jangan
+    // suruh user "menjalankan bun run dev di 127.0.0.1:3031" (mustahil di
+    // serverless). Katakan yang sebenarnya: pipeline real = instalasi lokal.
+    if (process.env.VERCEL) {
+      throw new Error(
+        "Engine FastAPI tidak tersedia di serverless Vercel — pemrosesan bundle data asli dijalankan dari instalasi lokal (sandbox/PC) tempat engine produksi :3031 hidup. Run DEMO tetap jalan di sini (fallback embedded), dan semua snapshot yang sudah dikomit tetap terlihat di situs ini.",
+      );
+    }
     throw new Error(
       `Engine service tidak terjangkau di ${target} — pastikan service berjalan (demo: mini-services/engine :3030 · produksi: mini-services/engine-fastapi :3031). Detail: ${err instanceof Error ? err.message : String(err)}`,
     );

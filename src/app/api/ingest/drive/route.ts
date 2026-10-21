@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { createBundleWriter } from "@/lib/ingest-bundle";
+import { createBundleWriter, BundleDiskFullError } from "@/lib/ingest-bundle";
 import {
   canonicalDriveUrl, collectDriveFiles, dedupeDriveFiles, DriveAccessError, DriveFileBadError,
   downloadDriveFile, listDriveFolder, mapDriveFolderKey, parseDriveFolderId,
@@ -18,10 +18,21 @@ export const maxDuration = 60;
 
 const MAX_TOTAL_BYTES = 400 * 1024 * 1024; // samakan dengan batas ZIP (R-10)
 const MAX_FILE_BYTES = 60 * 1024 * 1024;
-const MAX_FILES = 200;
+const MAX_FILES = 300;
 const DOWNLOAD_CONCURRENCY = 4;
-/** Amplifikasi fetch: N link × listing (1+subfolder) — batasi per tarikan (audit 48-g-api). */
-const MAX_TARGETS = 8;
+/** Pindai subfolder per folder target (struktur "14 folder dalam satu
+ *  folder induk" harus muat — 16 memberi ruang; pelindung utama tetap
+ *  MAX_FILES / MAX_TOTAL_BYTES / timeout listing). */
+const MAX_SUBFOLDERS = 16;
+/** Maksimal LINK tersimpan per tarikan (audit 48-g-api: batasi amplifikasi
+ *  listing). Naik 8 → 16 (2026-10-21): struktur kanonik user = 14 folder —
+ *  mereka harus bisa mencentang SEMUanya sekaligus seperti aplikasi desktop
+ *  Python; pelindung nyata tetap jumlah file, total byte, dan dinding waktu. */
+const MAX_TARGETS = 16;
+/** Listing paralel lintas-target: 16 folder × ~1-2 dtk listing BERUNTUN
+ *  ≈ 20-30 dtk sendiri sudah menabrak maxDuration serverless — pool kecil
+ *  memotongnya jadi ±8 dtk tanpa membombardir Drive. */
+const LISTING_CONCURRENCY = 3;
 
 const EXCEL_RE = /\.(xlsx|xls|xlsb|xlsm)$/i;
 
@@ -144,6 +155,14 @@ export async function POST(req: NextRequest) {
       const status = err.code === "NOT_FOUND" ? 404 : 422;
       return NextResponse.json({ error: err.message }, { status });
     }
+    // Disk penuh di lingkungan serverless (mkdir/meta di luar try bagian dalam)
+    // → 507 Insufficient Storage + pesan ramah, bukan "ENOSPC" mentah.
+    if (err instanceof BundleDiskFullError) {
+      return NextResponse.json({ error: err.message }, { status: 507 });
+    }
+    if (err instanceof Error && /ENOSPC|no space left/i.test(err.message)) {
+      return NextResponse.json({ error: new BundleDiskFullError().message }, { status: 507 });
+    }
     // Pesan milik modul kita (bahasa Indonesia, tanpa path internal) boleh
     // diteruskan; error Prisma / error sistem (EACCES, path server) → generik.
     const isPrisma =
@@ -236,7 +255,7 @@ async function handleSave(body: Record<string, unknown>): Promise<Response> {
     warnings.push("Folder tidak berisi file Excel (.xlsx/.xls/.xlsb) saat ini diperiksa.");
   }
   if (subfolderCount > 0) {
-    warnings.push(`Folder berisi ${subfolderCount} subfolder — subfolder ikut dipindai saat ditarik (maks 12).`);
+    warnings.push(`Folder berisi ${subfolderCount} subfolder — subfolder ikut dipindai saat ditarik (maks ${MAX_SUBFOLDERS}).`);
   }
 
   return NextResponse.json({ link: toLinkDto(row), created: !existing, warnings });
@@ -286,9 +305,27 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
   let skippedNonExcelTotal = 0;
 
   const seenPaths = new Set<string>();
+  // Listing LIVE per-target — PARALEL pool kecil (urutan tetap dipertahankan:
+  // hasil diindeks tIdx, merge di bawah tetap berurutan & deterministik).
+  const collectedPerTarget: Awaited<ReturnType<typeof collectDriveFiles>>[] = [];
+  let listingCursor = 0;
+  const listingWorkers = Array.from(
+    { length: Math.min(LISTING_CONCURRENCY, targets.length) },
+    async () => {
+      while (listingCursor < targets.length) {
+        const tIdx = listingCursor;
+        listingCursor += 1;
+        collectedPerTarget[tIdx] = await collectDriveFiles(targets[tIdx]!.folderId, {
+          maxFiles: MAX_FILES,
+          maxFolders: MAX_SUBFOLDERS,
+        });
+      }
+    },
+  );
+  await Promise.all(listingWorkers);
+
   for (let tIdx = 0; tIdx < targets.length; tIdx += 1) {
-    const t = targets[tIdx]!;
-    const collected = await collectDriveFiles(t.folderId, { maxFiles: MAX_FILES, maxFolders: 12 });
+    const collected = collectedPerTarget[tIdx]!;
     const dedup = dedupeDriveFiles(collected.files);
     skippedNonExcelTotal += collected.skippedNonExcel;
 
@@ -443,7 +480,14 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
     return NextResponse.json(manifest);
   } catch (err) {
     await writer.abort();
+    if (err instanceof BundleDiskFullError) {
+      return NextResponse.json({ error: err.message }, { status: 507 });
+    }
     const message = err instanceof Error ? err.message : "Gagal menarik bundle dari Drive.";
+    // ENOSPC dari mkdir/finish (bukan writeFile) → pesan ramah, bukan teks sistem.
+    if (/ENOSPC|no space left/i.test(message)) {
+      return NextResponse.json({ error: new BundleDiskFullError().message }, { status: 507 });
+    }
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

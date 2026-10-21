@@ -47,6 +47,49 @@ export function bundleMetaPath(bundleId: string): string {
   return `${bundleDir(bundleId)}.json`;
 }
 
+/** Id bundle dari nama entri direktori bundle ("{id}" atau "{id}.json"). */
+function bundleIdOfEntry(name: string): string | null {
+  const m = name.match(/^([a-f0-9-]{8,64})(\.json)?$/i);
+  return m?.[1] ?? null;
+}
+
+/**
+ * Bersihkan bundle LAMA di lingkungan SERVERLESS (Vercel) sebelum menulis
+ * bundle baru. /tmp lambda kuotanya kecil (±ratusan MB) dan efemeral — tanpa
+ * sweep, 2-3 tarikan Drive besar berturut-turut memenuhi disk (terverifikasi
+ * live 2026-10-21: tarikan 130 MB gagal "ENOSPC: no space left on device").
+ * Hanya aktif bila process.env.VERCEL — self-host/sandbox mempertahankan
+ * bundle-nya demi FR-12 (komit ulang memakai bundleId lama). Entri yang baru
+ * saja disentuh (< 5 menit) dipertahankan agar tarikan/unggahan paralel di
+ * instance sama tidak saling menghapus. Tidak pernah melempar error.
+ *
+ * @return jumlah entri (dir/meta) yang dihapus.
+ */
+export async function sweepServerlessBundles(keepBundleId: string): Promise<number> {
+  if (!process.env.VERCEL) return 0;
+  let removed = 0;
+  try {
+    const entries = await fs.readdir(BUNDLES_DIR, { withFileTypes: true });
+    const now = Date.now();
+    for (const e of entries) {
+      const id = bundleIdOfEntry(e.name);
+      if (!id || id === keepBundleId) continue;
+      const p = path.join(BUNDLES_DIR, e.name);
+      try {
+        const st = await fs.stat(p);
+        if (now - st.mtimeMs < 5 * 60_000) continue; // aktif/baru — jangan sentuh
+      } catch {
+        continue; // hilang di tengah jalan — abaikan
+      }
+      await fs.rm(p, { recursive: true, force: true }).catch(() => undefined);
+      removed += 1;
+    }
+  } catch {
+    // BUNDLES_DIR belum ada — tidak ada yang perlu dibersihkan.
+  }
+  return removed;
+}
+
 export async function saveBundleMeta(manifest: BundleManifest): Promise<void> {
   await fs.writeFile(bundleMetaPath(manifest.bundleId), JSON.stringify(manifest), "utf-8");
 }

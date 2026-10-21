@@ -9,7 +9,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
-import { bundleDir, computeFolderStats, saveBundleMeta } from "@/lib/bundles";
+import { bundleDir, computeFolderStats, saveBundleMeta, sweepServerlessBundles } from "@/lib/bundles";
 import type { BundleManifest } from "@/lib/types";
 
 const EXCEL_RE = /\.(xlsx|xls|xlsb|xlsm)$/i; // xlsm: engine FastAPI juga membacanya (audit 48-g-engine)
@@ -28,6 +28,18 @@ export class BundleLimitError extends Error {
   constructor(maxBytes: number) {
     super(`Total file Excel melebihi batas ${(maxBytes / 1024 / 1024).toFixed(0)} MB — bundle dilepas.`);
     this.name = "BundleLimitError";
+  }
+}
+
+/** Disk penyimpanan bundle penuh (ENOSPC) — kuota /tmp serverless terlampaui
+ *  oleh tarikan/unggahan sebesar itu (terverifikasi live di Vercel 2026-10-21:
+ *  bundle 130 MB + tumpukan bundle lama → "no space left on device"). */
+export class BundleDiskFullError extends Error {
+  constructor() {
+    super(
+      "Penyimpanan bundle penuh (kuota disk serverless terlampaui) — bundle lama otomatis dibersihkan saat tarikan/unggahan berikutnya. Bila masih gagal: kecilkan tarikan (per folder) atau jalankan di instalasi lokal (sandbox/PC) yang tanpa kuota serverless.",
+    );
+    this.name = "BundleDiskFullError";
   }
 }
 
@@ -55,6 +67,9 @@ export async function createBundleWriter(
   opts: { maxFileBytes?: number; maxTotalBytes?: number } = {},
 ): Promise<BundleWriter> {
   const dir = bundleDir(bundleId); // validasi bundleId sekali di sini
+  // Serverless: /tmp sempit & efemeral — bersihkan bundle lama dulu supaya
+  // tarikan besar tidak menabrak ENOSPC (bundle baru di-keep by id).
+  await sweepServerlessBundles(bundleId);
   await fs.mkdir(dir, { recursive: true });
 
   let fileCount = 0;
@@ -104,7 +119,12 @@ export async function createBundleWriter(
         throw new BundleLimitError(opts.maxTotalBytes);
       }
       await fs.mkdir(path.dirname(dest), { recursive: true });
-      await fs.writeFile(dest, data);
+      try {
+        await fs.writeFile(dest, data);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOSPC") throw new BundleDiskFullError();
+        throw err;
+      }
       fileCount += 1;
       totalBytes += data.byteLength;
       excelEntries.push({ path: norm, bytes: data.byteLength });

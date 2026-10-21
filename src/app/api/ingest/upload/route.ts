@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { unzipSync } from "fflate";
-import { BundleEmptyError, BundleLimitError, createBundleWriter } from "@/lib/ingest-bundle";
+import { BundleDiskFullError, BundleEmptyError, BundleLimitError, createBundleWriter } from "@/lib/ingest-bundle";
 import { BUNDLES_DIR, FOLDER_TEMPLATE } from "@/lib/bundles";
 import { db } from "@/lib/db";
 import path from "path";
@@ -80,8 +80,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(manifest);
   } catch (err) {
     await writer.abort();
-    if (err instanceof BundleEmptyError || err instanceof BundleLimitError) {
-      return NextResponse.json({ error: err.message }, { status: 422 });
+    if (err instanceof BundleEmptyError || err instanceof BundleLimitError || err instanceof BundleDiskFullError) {
+      return NextResponse.json({ error: err.message }, { status: err instanceof BundleDiskFullError ? 507 : 422 });
+    }
+    // ENOSPC mentah dari operasi fs lain (mkdir/meta) — jangan bocorkan teks sistem.
+    if (err instanceof Error && /ENOSPC|no space left/i.test(err.message)) {
+      return NextResponse.json({ error: new BundleDiskFullError().message }, { status: 507 });
     }
     const message = err instanceof Error && !/EACCES|ENOENT|EEXIST|\/tmp\/|\/home\//i.test(err.message) ? err.message : "Gagal mengekstrak bundle.";
     return NextResponse.json({ error: message }, { status: 500 });

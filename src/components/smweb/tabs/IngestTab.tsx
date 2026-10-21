@@ -26,7 +26,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  useDriveDeleteLink, useDriveLinks, useDrivePull, useDriveSaveLink,
+  useDriveDeleteLink, useDriveLinks, useDrivePull, useDriveSaveLink, useEngineHealth,
   useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns, useSettings,
 } from "@/hooks/use-sm-api";
 import { collectExcelFromFolder, MAX_FOLDER_BYTES, zipPickedFolder } from "@/lib/folder-pick";
@@ -78,6 +78,12 @@ export function IngestTab() {
   const includedDriveIds = driveLinks
     .filter((l) => driveInclude[l.id] !== false)
     .map((l) => l.id);
+  // Jujur soal lingkungan: bila engine PRODUKSI tidak terjangkau (deploy
+  // serverless Vercel tanpa engine FastAPI), user perlu tahu SEKARANG — bukan
+  // nanti saat "Proses Bundle" gagal. Di sandbox/lokal kedua engine hidup →
+  // catatan ini tidak muncul.
+  const engineHealthQuery = useEngineHealth();
+  const prodEngineDown = engineHealthQuery.data?.production?.reachable === false;
   const { data: runsData, isPending: runsPending } = useRuns();
   const runList = runsData?.runs ?? [];
   const {
@@ -388,12 +394,25 @@ export function IngestTab() {
                 <Cloud className="h-4 w-4" aria-hidden /> Ambil dari Google Drive — tanpa unduh &amp; ZIP manual
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Tempel link folder Drive (satu link per folder export, mis. “1. DEVIASI WEEKLY”) —
-                server yang menarik file Excel-nya langsung, lalu memvalidasi lewat jalur yang sama
-                dengan ZIP (FR-2). Syarat: folder dibagikan “Siapa saja yang memiliki link · Viewer”.
+                Tempel link folder Drive (satu link per folder export, mis. “1. DEVIASI WEEKLY",
+                atau satu link folder induk — subfolder ikut dipindai, maks 16) — server yang
+                menarik file Excel-nya langsung, lalu memvalidasi lewat jalur yang sama dengan
+                ZIP (FR-2). Syarat: folder dibagikan “Siapa saja yang memiliki link · Viewer”.
                 Link tersimpan di sini supaya diingat — centang lalu Tarik.
               </p>
             </div>
+            {prodEngineDown && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 px-3 py-2">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                <span>
+                  Instansi ini berjalan <strong>serverless tanpa engine FastAPI</strong> — link bisa
+                  disimpan &amp; bundle bisa ditarik, tetapi <strong>Proses Bundle data asli</strong>
+                  hanya bisa dijalankan di instalasi lokal (sandbox/PC) tempat engine :3031 hidup.
+                  Batas tarikan serverless: ±60 detik dan kuota disk sementara — untuk folder
+                  besar, tarik di instalasi lokal.
+                </span>
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <Input
                 className="flex-1 min-w-64"
@@ -505,6 +524,8 @@ export function IngestTab() {
                   </Button>
                   <p className="text-xs text-muted-foreground">
                     Manifest muncul di bawah — lanjutkan dengan “Proses Bundle” seperti biasa.
+                    Maksimal 16 link per tarikan (semua folder kanonik sekaligus, seperti aplikasi
+                    desktop) · batas total 400 MB.
                   </p>
                 </div>
               </div>

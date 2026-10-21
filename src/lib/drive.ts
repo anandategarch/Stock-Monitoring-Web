@@ -245,7 +245,7 @@ export type DriveCollect = {
  */
 export async function collectDriveFiles(
   folderId: string,
-  limits: { maxFiles: number; maxFolders: number } = { maxFiles: 200, maxFolders: 12 },
+  limits: { maxFiles: number; maxFolders: number } = { maxFiles: 300, maxFolders: 16 },
 ): Promise<DriveCollect> {
   const root = await listDriveFolder(folderId);
   const canonicalName =
