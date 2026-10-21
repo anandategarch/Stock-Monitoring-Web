@@ -442,35 +442,43 @@ async function handlePreview(body: Record<string, unknown>): Promise<Response> {
   );
 
   // Segarkan lastCheckedAt + jumlah file live (bukan "terakhir ditarik" —
-  // preview jujur tidak mengubah lastUsedAt/totalBytes).
-  const now = new Date();
-  await Promise.all(
-    plan.targets.map((t, i) =>
-      t.rowId
-        ? db.driveFolderLink.update({
-            where: { id: t.rowId },
-            data: {
-              lastCheckedAt: now,
-              fileCount: plan.driveFolders[i]?.fileCount ?? undefined,
-            },
-          })
-        : Promise.resolve(null),
-    ),
-  );
+  // preview jujur tidak mengubah lastUsedAt/totalBytes). Kegagalan segarkan
+  // (koneksi pooler sesaat penuh) TIDAK fatal — pratinjau tetap valid,
+  // dilaporkan jujur sebagai notice.
+  try {
+    const now = new Date();
+    await Promise.all(
+      plan.targets.map((t, i) =>
+        t.rowId
+          ? db.driveFolderLink.update({
+              where: { id: t.rowId },
+              data: {
+                lastCheckedAt: now,
+                fileCount: plan.driveFolders[i]?.fileCount ?? undefined,
+              },
+            })
+          : Promise.resolve(null),
+      ),
+    );
 
-  await db.auditLog.create({
-    data: {
-      action: "DRIVE_PREVIEW",
-      entity: "DriveFolderLink",
-      entityId: plan.targets[0]?.rowId ?? clampString(plan.targets.map((t) => t.folderId).join(","), 200),
-      detailJson: JSON.stringify({
-        folderNames: plan.driveFolders.map((f) => f.folderName),
-        fileCount: plan.merged.length,
-        notices: plan.driveNotices.length,
-      }),
-      actor: "analyst",
-    },
-  });
+    await db.auditLog.create({
+      data: {
+        action: "DRIVE_PREVIEW",
+        entity: "DriveFolderLink",
+        entityId: plan.targets[0]?.rowId ?? clampString(plan.targets.map((t) => t.folderId).join(","), 200),
+        detailJson: JSON.stringify({
+          folderNames: plan.driveFolders.map((f) => f.folderName),
+          fileCount: plan.merged.length,
+          notices: plan.driveNotices.length,
+        }),
+        actor: "analyst",
+      },
+    });
+  } catch {
+    plan.driveNotices.push(
+      "Waktu cek link tidak bisa disegarkan (koneksi DB sesaat penuh) — pratinjau tetap valid.",
+    );
+  }
 
   const manifest: BundleManifest = {
     bundleId: "",
@@ -563,42 +571,54 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
     // Segarkan baris link yang dipakai (urutan driveFolders = urutan targets).
     // totalBytes/folderKey disegarkan juga — folderKey eksplisit null agar
     // rename non-kanonik tidak tertinggal STALE (audit 48-g-data).
-    const now = new Date();
-    await Promise.all(
-      plan.targets.map((t, i) =>
-        t.rowId
-          ? db.driveFolderLink.update({
-              where: { id: t.rowId },
-              data: {
-                lastUsedAt: now,
-                folderName: driveFolders[i]?.folderName ?? undefined,
-                folderKey: driveFolders[i]?.folderKey ?? null,
-                fileCount: driveFolders[i]?.fileCount ?? undefined,
-                totalBytes: perTargetBytes[i] ?? undefined,
-              },
-            })
-          : Promise.resolve(null),
-      ),
-    );
+    // Kegagalan penyegaran/audit (mis. kuota koneksi pooler Supabase sesaat
+    // penuh — EMAXCONNSESSION terverifikasi live) TIDAK boleh membuang bundle
+    // yang baru selesai diunduh 47 detik ini: catat jujur sebagai notice,
+    // manifest tetap dikembalikan (writer.abort di catch luar tak sempat
+    // menyentuhnya karena kita return di dalam try ini).
+    try {
+      const now = new Date();
+      await Promise.all(
+        plan.targets.map((t, i) =>
+          t.rowId
+            ? db.driveFolderLink.update({
+                where: { id: t.rowId },
+                data: {
+                  lastUsedAt: now,
+                  folderName: driveFolders[i]?.folderName ?? undefined,
+                  folderKey: driveFolders[i]?.folderKey ?? null,
+                  fileCount: driveFolders[i]?.fileCount ?? undefined,
+                  totalBytes: perTargetBytes[i] ?? undefined,
+                },
+              })
+            : Promise.resolve(null),
+        ),
+      );
 
-    await db.auditLog.create({
-      data: {
-        action: "DRIVE_PULL_BUNDLE",
-        entity: "BundleManifest",
-        entityId: bundleId,
-        detailJson: JSON.stringify({
-          bundleId,
-          folderNames: driveFolders.map((f) => f.folderName),
-          fileCount: manifest.fileCount,
-          totalBytes: manifest.totalBytes,
-          skippedDuplicates: plan.skippedDuplicates.length,
-          suffixedDuplicates: plan.suffixedDuplicates.length,
-          skippedFiles: skippedFiles.length,
-          notices: plan.driveNotices.length,
-        }),
-        actor: "analyst",
-      },
-    });
+      await db.auditLog.create({
+        data: {
+          action: "DRIVE_PULL_BUNDLE",
+          entity: "BundleManifest",
+          entityId: bundleId,
+          detailJson: JSON.stringify({
+            bundleId,
+            folderNames: driveFolders.map((f) => f.folderName),
+            fileCount: manifest.fileCount,
+            totalBytes: manifest.totalBytes,
+            skippedDuplicates: plan.skippedDuplicates.length,
+            suffixedDuplicates: plan.suffixedDuplicates.length,
+            skippedFiles: skippedFiles.length,
+            notices: plan.driveNotices.length,
+          }),
+          actor: "analyst",
+        },
+      });
+    } catch {
+      manifest.driveNotices = [
+        ...(manifest.driveNotices ?? []),
+        "“Terakhir ditarik”/audit link gagal disegarkan (koneksi DB sesaat penuh) — bundle & manifest tetap valid.",
+      ];
+    }
 
     return NextResponse.json(manifest);
   } catch (err) {
