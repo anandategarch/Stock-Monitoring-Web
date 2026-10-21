@@ -3,7 +3,7 @@
 // alasan + kategori tindakan + qty temuan fisik (FR-41), timeline ter-audit (FR-40..44).
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   CheckCircle2, ChevronRight, ClipboardList, Clock, Fingerprint, History, Loader2,
   Play, RotateCcw, Save, Undo2, UserRound, XCircle,
@@ -26,6 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   useCaseEvent, useFollowupCase, useFollowups, useOverview, usePics, useUpdateCase,
 } from "@/hooks/use-sm-api";
+import { useDebounced } from "@/hooks/use-debounced";
 import { CaseStatusBadge } from "@/components/smweb/badges";
 import { EmptyState } from "@/components/smweb/empty-state";
 import { StatCard } from "@/components/smweb/stat-card";
@@ -61,16 +62,6 @@ function isAlasanWajib(from: CaseStatus, to: CaseStatus): boolean {
   const closing = to === "SELESAI" || to === "DIBATALKAN";
   const reopening = (from === "SELESAI" || from === "DIBATALKAN") && to === "PENDING";
   return closing || reopening;
-}
-
-/** Debounce kecil untuk input pencarian — mencegah 1 request per ketikan. */
-function useDebounced<T>(value: T, delayMs = 300): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(t);
-  }, [value, delayMs]);
-  return debounced;
 }
 
 const PIC_MANUAL = "__manual__";

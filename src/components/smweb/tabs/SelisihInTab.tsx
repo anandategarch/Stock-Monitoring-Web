@@ -89,7 +89,7 @@ function HasilAuditBadge({ hasil }: { hasil: "OK" | "SELISIH" }) {
     );
   }
   return (
-    <Badge className="border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-300">
+    <Badge className="border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-300">
       SELISIH
     </Badge>
   );
@@ -184,24 +184,24 @@ export default function SelisihInTab({ snapshotId }: { snapshotId: string | null
         </p>
       </div>
 
-      {/* KPI total */}
+      {/* KPI total — nilai ini KUANTITAS (audit 48-g-ui): jangan format Rupiah */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <StatCard
-          title="Σ IN (Accurate)"
-          value={fmtRp(total.inAccurate)}
+          title="Σ IN (Accurate, qty)"
+          value={fmtQty(total.inAccurate)}
           sub="sumber 42.05 + 32.24 + 99.01"
           icon={Download}
           tone="emerald"
         />
         <StatCard
-          title="Σ Barang Masuk (rekap)"
-          value={fmtRp(total.barangMasuk)}
+          title="Σ Barang Masuk (rekap, qty)"
+          value={fmtQty(total.barangMasuk)}
           sub="sumber rekap BARANG MASUK"
           icon={PackagePlus}
         />
         <StatCard
-          title="Σ Selisih (BM − IN)"
-          value={fmtRp(total.selisih)}
+          title="Σ Selisih (BM − IN, qty)"
+          value={fmtSignedQty(total.selisih)}
           sub="bertanda dua arah (INV-2)"
           icon={ArrowLeftRight}
           tone={total.selisih < 0 ? "rose" : "emerald"}
@@ -313,7 +313,13 @@ export default function SelisihInTab({ snapshotId }: { snapshotId: string | null
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip
                 formatter={(v: number | string) => fmtQty(Number(v))}
-                contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                contentStyle={{
+                  fontSize: 12,
+                  borderRadius: 8,
+                  backgroundColor: "var(--popover)",
+                  border: "1px solid var(--border)",
+                  color: "var(--popover-foreground)",
+                }}
               />
               <ReferenceLine y={0} stroke="var(--border)" />
               <Bar dataKey="selisih" name="Selisih IN" fill="var(--chart-4)" radius={[3, 3, 0, 0]} />

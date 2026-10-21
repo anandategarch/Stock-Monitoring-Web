@@ -33,6 +33,10 @@ single-user (D-6) · repo baru terpisah (D-8).
 (eksplisit saat `VERCEL=1`) sehingga **manifest pratinjau per folder tetap bisa dipakai di Vercel**,
 tapi proses bundle real tetap butuh engine FastAPI yang di-host (§5.2) — komit ulang (FR-12)
 antar-lambda akan jujur meminta unggah ulang (roadmap: storage bersama, PRD Fase 5).
+Catatan tambahan: **body request serverless Vercel dibatasi ±4,5 MB** — ZIP besar maupun tarikan
+Google Drive yang melebihi itu gagal di gerbang platform SEBELUM pesan jujur aplikasi; untuk
+bundle real berukuran besar gunakan self-host/lokal (jalur Drive di serverless tetap sah untuk
+manifest, tapi batas waktu `maxDuration` 60 dtk berlaku).
 
 **Fallback embedded**: bila service engine demo (`SM_ENGINE_URL`) tidak terjangkau,
 run DEMO (tanpa bundleId) otomatis diproses generator yang di-bundle ke dalam aplikasi —

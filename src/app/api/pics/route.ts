@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { clampString, isNonEmptyString } from "@/lib/validate";
 import type { OutletPICDto } from "@/lib/types";
@@ -37,14 +38,26 @@ export async function POST(req: NextRequest) {
   if (existing) {
     return NextResponse.json({ error: "PIC ini sudah terdaftar untuk outlet tersebut." }, { status: 409 });
   }
-  const created = await db.outletPIC.create({
-    data: {
-      outletCode: outletCode.slice(0, 12),
-      picName: picName.slice(0, 120),
-      waNumber: clampString(body.waNumber, 40),
-      notes: clampString(body.notes, 300),
-    },
-  });
+  let created;
+  try {
+    created = await db.outletPIC.create({
+      data: {
+        outletCode: outletCode.slice(0, 12),
+        picName: picName.slice(0, 120),
+        waNumber: clampString(body.waNumber, 40),
+        notes: clampString(body.notes, 300),
+      },
+    });
+  } catch (err) {
+    // Race create ganda (audit 48-g-api) → 409 ramah, bukan 500 mentah.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json(
+        { error: "PIC ini sudah terdaftar untuk outlet tersebut." },
+        { status: 409 },
+      );
+    }
+    throw err;
+  }
   await db.auditLog.create({
     data: {
       action: "PIC_CREATE",

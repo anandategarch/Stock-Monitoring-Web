@@ -28,11 +28,18 @@ export async function engineProcess(
   engineUrl?: string,
 ): Promise<EngineResult> {
   const target = engineUrl ?? ENGINE_URL;
+  // Shared-secret opsional engine produksi (audit 48-g-engine): bila
+  // SM_ENGINE_TOKEN diisi di kedua sisi, dikirim sebagai header; engine tanpa
+  // token mengabaikannya (backward compatible).
+  const token = process.env.SM_ENGINE_TOKEN;
   let res: Response;
   try {
     res = await fetch(`${target}/process`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "x-engine-token": token } : {}),
+      },
       body: JSON.stringify(req),
       signal: AbortSignal.timeout(600000),
       cache: "no-store",

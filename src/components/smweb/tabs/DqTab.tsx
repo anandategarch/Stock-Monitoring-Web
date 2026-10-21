@@ -150,7 +150,7 @@ export default function DqTab({ snapshotId }: { snapshotId: string | null }) {
       ) : issues.length === 0 ? (
         <EmptyState
           icon={ShieldCheck}
-          title="Tidak ada isu kualitas data"
+          title="Tidak ada isu kualitas data — bersih ✓"
           description="Snapshot ini tidak memiliki isu format pipeline yang tercatat."
         />
       ) : groups.length === 0 ? (
@@ -174,18 +174,20 @@ export default function DqTab({ snapshotId }: { snapshotId: string | null }) {
                     <Badge variant="outline" className="ml-auto shrink-0">{fmtInt(g.list.length)}×</Badge>
                   </span>
                 </AccordionTrigger>
-                <AccordionContent className="space-y-3">
-                  {g.list.map((iss) => (
-                    <div key={iss.id} className="rounded-md border bg-muted/30 px-3 py-2 space-y-1">
-                      <p className="text-sm">{iss.message}</p>
-                      <p className="font-mono text-[11px] text-muted-foreground break-words">
-                        {iss.source ?? "(tanpa sumber)"}
-                        {iss.sheet ? ` · ${iss.sheet}` : ""}
-                        {iss.rowNumber !== null ? ` · baris ${iss.rowNumber}` : ""}
-                        {iss.rawValue ? ` · raw: ${iss.rawValue}` : ""}
-                      </p>
-                    </div>
-                  ))}
+                <AccordionContent>
+                  <div className="max-h-64 overflow-y-auto nice-scroll pr-1 space-y-3">
+                    {g.list.map((iss) => (
+                      <div key={iss.id} className="rounded-md border bg-muted/30 px-3 py-2 space-y-1">
+                        <p className="text-sm">{iss.message}</p>
+                        <p className="font-mono text-[11px] text-muted-foreground break-words">
+                          {iss.source ?? "(tanpa sumber)"}
+                          {iss.sheet ? ` · ${iss.sheet}` : ""}
+                          {iss.rowNumber !== null ? ` · baris ${iss.rowNumber}` : ""}
+                          {iss.rawValue ? ` · raw: ${iss.rawValue}` : ""}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </AccordionContent>
               </AccordionItem>
             ))}

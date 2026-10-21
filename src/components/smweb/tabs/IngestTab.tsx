@@ -5,7 +5,7 @@
 // diproses → pratinjau → Komit (FR-4: tidak pernah menimpa snapshot diam-diam).
 "use client";
 
-import { useRef, useState, type InputHTMLAttributes } from "react";
+import { useEffect, useRef, useState, type InputHTMLAttributes } from "react";
 import {
   AlertTriangle, CheckCircle2, Cloud, CloudDownload, Database, FileWarning, FolderOpen, FolderTree,
   Loader2, PackageOpen, Play, Rocket, Save, Trash2, UploadCloud, XCircle,
@@ -19,11 +19,15 @@ import { Badge } from "@/components/ui/badge";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
   useDriveDeleteLink, useDriveLinks, useDrivePull, useDriveSaveLink,
-  useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns,
+  useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns, useSettings,
 } from "@/hooks/use-sm-api";
 import { collectExcelFromFolder, MAX_FOLDER_BYTES, zipPickedFolder } from "@/lib/folder-pick";
 import type { BundleManifest } from "@/lib/types";
@@ -42,6 +46,11 @@ const folderInputProps = {
   webkitdirectory: "",
   directory: "",
 } as unknown as InputHTMLAttributes<HTMLInputElement>;
+
+/** Ringkas daftar nama untuk peringatan manifest: 5 nama + hitungan sisanya. */
+function clipList(items: string[], max = 5): string {
+  return items.slice(0, max).join(", ") + (items.length > max ? ` … +${items.length - max} lainnya` : "");
+}
 
 export function IngestTab() {
   const setActiveTab = useSmStore((s) => s.setActiveTab);
@@ -71,21 +80,43 @@ export function IngestTab() {
     .map((l) => l.id);
   const { data: runsData, isPending: runsPending } = useRuns();
   const runList = runsData?.runs ?? [];
-  const { data: detail, isPending: detailPending } = useRunDetail(selectedRunId);
+  const {
+    data: detail, isPending: detailPending, error: detailError, refetch: refetchDetail,
+  } = useRunDetail(selectedRunId);
+  const { data: settingsData } = useSettings();
+  const settingsApplied = useRef(false);
+
+  useEffect(() => {
+    // FR-80: default TANGGAL H & AMBANG dari tab Config (Setting) — diterapkan
+    // SEKALI saat settings termuat, tanpa menimpa edit user (audit 48-g-ui).
+    if (!settingsApplied.current && settingsData) {
+      settingsApplied.current = true;
+      setTanggalH(String(settingsData.settings.tanggalHDefault));
+      setAmbang(String(settingsData.settings.ambangAcrDefault));
+    }
+  }, [settingsData]);
 
   const applyManifest = (out: BundleManifest, verb = "terunggah") => {
     setManifest(out);
     setBundleName(out.name);
     const missing = out.missingFolders.length;
-    toast.success(
-      `Bundle "${out.name}" ${verb}: ${out.fileCount} file Excel · ${out.folders.length - missing}/${out.folders.length} folder dikenali${missing ? ` · ${missing} folder kosong/tdak ada` : ""}.`,
-    );
+    const msg =
+      `Bundle "${out.name}" ${verb}: ${out.fileCount} file Excel · ${out.folders.length - missing}/${out.folders.length} folder dikenali${missing ? ` · ${missing} folder kosong/tidak ada` : ""}.`;
+    if (missing > 0 || (out.skippedFiles?.length ?? 0) > 0) {
+      toast.warning(msg);
+    } else {
+      toast.success(msg);
+    }
   };
 
   const onPickFile = (file: File | null) => {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".zip")) {
       toast.error("Pilih file .zip — bundle export Accurate yang di-zip (struktur 14 folder config.json).");
+      return;
+    }
+    if (file.size > 400 * 1024 * 1024) {
+      toast.error(`ZIP ${(file.size / 1048576).toFixed(0)} MB — di atas batas 400 MB (R-10). Zipping ulang per periode.`);
       return;
     }
     upload.mutate(file, {
@@ -372,7 +403,7 @@ export function IngestTab() {
                 inputMode="url"
                 aria-label="Link folder Google Drive"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") onDriveSave();
+                  if (e.key === "Enter" && !driveSave.isPending) onDriveSave();
                 }}
               />
               <Button variant="outline" onClick={onDriveSave} disabled={driveSave.isPending} className="gap-2">
@@ -404,14 +435,20 @@ export function IngestTab() {
                           aria-label={`Ikut sertakan folder ${l.folderName}`}
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium truncate">{l.folderName}</p>
+                          <Label
+                            htmlFor={`drive-${l.id}`}
+                            className="cursor-pointer text-sm font-medium truncate block"
+                          >
+                            {l.folderName}
+                          </Label>
                           <p className="text-xs text-muted-foreground truncate">
                             {l.fileCount} file Excel
+                            {l.totalBytes ? ` · ${(l.totalBytes / 1048576).toFixed(1)} MB` : ""}
                             {l.lastUsedAt ? ` · terakhir ditarik ${fmtDateTime(l.lastUsedAt)}` : ""}
                           </p>
                         </div>
                         {l.folderKey ? (
-                          <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">
+                          <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">
                             {l.folderKey}
                           </Badge>
                         ) : (
@@ -419,16 +456,32 @@ export function IngestTab() {
                             TIDAK DIKENALI
                           </Badge>
                         )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600"
-                          onClick={() => driveDelete.mutate(l.id)}
-                          disabled={driveDelete.isPending}
-                          aria-label={`Hapus link ${l.folderName}`}
-                        >
-                          <Trash2 className="h-4 w-4" aria-hidden />
-                        </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-9 w-9 p-0 text-muted-foreground hover:text-rose-600"
+                              disabled={driveDelete.isPending}
+                              aria-label={`Hapus link ${l.folderName}`}
+                            >
+                              <Trash2 className="h-4 w-4" aria-hidden />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogTitle>Hapus link folder “{l.folderName}”?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              File di Google Drive tidak tersentuh — hanya link tersimpan di aplikasi
+                              yang hilang. Kamu bisa menempelkan ulang link-nya kapan saja.
+                            </AlertDialogDescription>
+                            <div className="flex justify-end gap-2">
+                              <AlertDialogCancel>Batal</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => driveDelete.mutate(l.id)}>
+                                Hapus
+                              </AlertDialogAction>
+                            </div>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </div>
                     );
                   })}
@@ -467,41 +520,51 @@ export function IngestTab() {
               <p className="text-xs text-muted-foreground">
                 <strong>{manifest.name}</strong> — {manifest.fileCount} file Excel ·{" "}
                 {(manifest.totalBytes / 1024 / 1024).toFixed(2)} MB
-                {manifest.skippedEntries > 0 ? ` · ${manifest.skippedEntries} entri non-Excel dilewati` : ""}
+                {manifest.skippedEntries > 0 ? ` · ${manifest.skippedEntries} entri non-Excel/terlalu besar dilewati` : ""}
               </p>
-              {manifest.missingFolders.length > 0 && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
-                  Folder tak ditemukan: {manifest.missingFolders.join(", ")} — engine preflight akan
-                  mencatat peringatan; folder Terima4215 memang tidak dibaca desktop v3.9.71.
-                </p>
-              )}
-              {manifest.source === "drive" && manifest.driveFolders && manifest.driveFolders.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Ditarik dari Drive: {manifest.driveFolders.map((f) => `${f.folderName} (${f.fileCount})`).join(" · ")}
-                </p>
-              )}
-              {manifest.skippedDuplicates && manifest.skippedDuplicates.length > 0 && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
-                  {manifest.skippedDuplicates.length} file Drive bernama sama dilewati (versi TERBARU menang):{" "}
-                  {manifest.skippedDuplicates.map((d) => d.path).join(", ")}.
-                </p>
-              )}
-              {manifest.suffixedDuplicates && manifest.suffixedDuplicates.length > 0 && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
-                  {manifest.suffixedDuplicates.length} file duplikat ditulis dengan akhiran __2 dst.:{" "}
-                  {manifest.suffixedDuplicates.join(", ")}.
-                </p>
-              )}
-              {manifest.skippedFiles && manifest.skippedFiles.length > 0 && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
-                  {manifest.skippedFiles.length} file Drive DILEWATI karena rusak/bukan Excel (cek folder Drive-nya):{" "}
-                  {manifest.skippedFiles.map((d) => d.path).join(", ")}.
-                </p>
-              )}
+              {/* Peringatan manifest — max-h + scroll supaya daftar panjang (33+ file)
+                  tidak meledakkan kartu (audit 48-g-ui); daftar diringkas 5 nama. */}
+              <div className="max-h-32 overflow-y-auto nice-scroll space-y-2 pr-1">
+                {manifest.missingFolders.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                    Folder tak ditemukan: {clipList(manifest.missingFolders)} — engine preflight akan
+                    mencatat peringatan; folder Terima4215 memang tidak dibaca desktop v3.9.71.
+                  </p>
+                )}
+                {manifest.source === "drive" && manifest.driveFolders && manifest.driveFolders.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Ditarik dari Drive: {manifest.driveFolders.map((f) => `${f.folderName} (${f.fileCount})`).join(" · ")}
+                  </p>
+                )}
+                {manifest.driveNotices && manifest.driveNotices.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                    {manifest.driveNotices.join(" · ")}
+                  </p>
+                )}
+                {manifest.skippedDuplicates && manifest.skippedDuplicates.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                    {manifest.skippedDuplicates.length} file Drive bernama sama dilewati (versi TERBARU menang):{" "}
+                    {clipList(manifest.skippedDuplicates.map((d) => d.path))}.
+                  </p>
+                )}
+                {manifest.suffixedDuplicates && manifest.suffixedDuplicates.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                    {manifest.suffixedDuplicates.length} file duplikat ditulis dengan akhiran __2 dst.:{" "}
+                    {clipList(manifest.suffixedDuplicates)}.
+                  </p>
+                )}
+                {manifest.skippedFiles && manifest.skippedFiles.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                    {manifest.skippedFiles.length} file Drive DILEWATI karena rusak/bukan Excel (cek folder Drive-nya):{" "}
+                    {clipList(manifest.skippedFiles.map((d) => d.path))}.
+                  </p>
+                )}
+              </div>
               <ScrollArea className="h-48 nice-scroll rounded-lg border">
                 <Table>
                   <TableHeader>
@@ -591,7 +654,9 @@ export function IngestTab() {
           className="gap-2"
         >
           {process.isPending ? (
-            <>Memproses…</>
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Memproses…
+            </>
           ) : (
             <>
               <Play className="h-4 w-4" aria-hidden />
@@ -655,7 +720,7 @@ export function IngestTab() {
                     <TableCell><RunStatusBadge status={r.status} /></TableCell>
                     <TableCell>
                       {r.committedAt ? (
-                        <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">
+                        <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">
                           <CheckCircle2 className="h-3 w-3 mr-1" aria-hidden /> Komit
                         </Badge>
                       ) : (
@@ -685,8 +750,23 @@ export function IngestTab() {
 
       {/* Pratinjau run terpilih */}
       {selectedRunId ? (
-        detailPending || !detail ? (
+        detailPending ? (
           <Skeleton className="h-64" />
+        ) : !detail ? (
+          <EmptyState
+            icon={FileWarning}
+            title="Gagal memuat pratinjau run"
+            description={
+              detailError instanceof Error
+                ? detailError.message
+                : "Pilih ulang run dari riwayat di atas."
+            }
+            action={
+              <Button variant="outline" onClick={() => void refetchDetail()}>
+                Coba Lagi
+              </Button>
+            }
+          />
         ) : (
           <div className="space-y-4">
             <div className="rounded-xl border bg-card p-4 space-y-4">
@@ -701,7 +781,7 @@ export function IngestTab() {
                   </Badge>
                 </div>
                 {detail.run.committedAt ? (
-                  <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">
+                  <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">
                     <CheckCircle2 className="h-3.5 w-3.5 mr-1" aria-hidden /> Sudah dikomit {fmtDateTime(detail.run.committedAt)}
                   </Badge>
                 ) : (
@@ -712,7 +792,9 @@ export function IngestTab() {
                     size="lg"
                   >
                     {commit.isPending ? (
-                      <>Mengkomit…</>
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Mengkomit…
+                      </>
                     ) : (
                       <>
                         <Save className="h-4 w-4" aria-hidden /> Komit Snapshot

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { clampString } from "@/lib/validate";
+import { clampString, isPeriodKey } from "@/lib/validate";
 import type { FollowUpCaseDto, FollowUpEventDto } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -55,8 +55,15 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   const data: Record<string, string | number | null> = {};
   if ("pic" in body) data.pic = clampString(body.pic, 120);
   if ("note" in body) data.note = clampString(body.note, 500);
-  if ("currentPeriodKey" in body && typeof body.currentPeriodKey === "string") {
-    data.currentPeriodKey = body.currentPeriodKey.slice(0, 7);
+  if ("currentPeriodKey" in body) {
+    // Validasi format penuh (audit 48-g-api) — bukan sekadar slice(0,7).
+    if (typeof body.currentPeriodKey !== "string" || !isPeriodKey(body.currentPeriodKey)) {
+      return NextResponse.json(
+        { error: "currentPeriodKey wajib format YYYY-MM (contoh: 2026-10)." },
+        { status: 422 },
+      );
+    }
+    data.currentPeriodKey = body.currentPeriodKey;
   }
   if ("currentQtyDeviasi" in body) {
     const v = body.currentQtyDeviasi;

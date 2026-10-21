@@ -270,12 +270,17 @@ export function useDriveSaveLink() {
 /** Tarik file Excel dari link tersimpan → bundle (respons = manifest, sama
  *  dengan unggah ZIP — alur pratinjau/komit lanjutan identik). */
 export function useDrivePull() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { ids?: string[]; url?: string }) =>
       fetchJson<BundleManifest>("/api/ingest/drive", {
         method: "POST",
         body: JSON.stringify({ action: "process", ...vars }),
       }),
+    onSuccess: () => {
+      // Segarkan "terakhir ditarik"/totalBytes/badge di daftar link (audit 48-g-ui).
+      void qc.invalidateQueries({ queryKey: qk.driveLinks });
+    },
   });
 }
 

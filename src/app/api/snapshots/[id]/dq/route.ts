@@ -14,6 +14,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   const severity = sp.get("severity") ?? "";
   const code = sp.get("code") ?? "";
 
+  // Konsistensi 404 dengan 9 route tetangga (audit 48-g-api):
+  const snap = await db.periodSnapshot.findUnique({ where: { id }, select: { id: true } });
+  if (!snap) return NextResponse.json({ error: "Snapshot tidak ditemukan." }, { status: 404 });
+
   const issues = await db.dQIssue.findMany({
     where: {
       snapshotId: id,

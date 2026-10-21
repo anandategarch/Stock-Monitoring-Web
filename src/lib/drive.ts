@@ -68,7 +68,11 @@ export function canonicalDriveUrl(folderId: string): string {
 
 function decodeEntities(s: string): string {
   return s
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&#(\d+);/g, (_, d: string) => {
+      const code = Number(d);
+      // jaga-jaga dari entitas di luar rentang Unicode (audit 48-g-api: RangeError)
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+    })
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -134,6 +138,17 @@ export function mapDriveFolderKey(folderName: string): string | null {
   return hit?.folderKey ?? null;
 }
 
+/** Error akses folder Drive dengan kode eksplisit — route memetakan status
+ *  tanpa mengendus teks pesan (audit 48-g-api). */
+export class DriveAccessError extends Error {
+  code: "PRIVATE" | "NOT_FOUND" | "EMPTY" | "INVALID_ID";
+  constructor(code: DriveAccessError["code"], message: string) {
+    super(message);
+    this.name = "DriveAccessError";
+    this.code = code;
+  }
+}
+
 // ---------- Listing ----------
 
 export type DriveEntry = {
@@ -152,16 +167,16 @@ export type DriveListing = {
 /** Daftar isi SATU folder Drive publik via embeddedfolderview (tanpa API key). */
 export async function listDriveFolder(folderId: string): Promise<DriveListing> {
   if (!FOLDER_ID_RE.test(folderId)) {
-    throw new Error("ID folder Drive tidak valid.");
+    throw new DriveAccessError("INVALID_ID", "ID folder Drive tidak valid.");
   }
   const res = await fetch(LIST_URL(folderId), {
     headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" },
     redirect: "follow",
     cache: "no-store",
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(15_000),
   });
   if (res.status === 404) {
-    throw new Error("Folder Drive tidak ditemukan (404) — cek link-nya.");
+    throw new DriveAccessError("NOT_FOUND", "Folder Drive tidak ditemukan (404) — cek link-nya.");
   }
   if (!res.ok) {
     throw new Error(`Drive merespons HTTP ${res.status} — coba lagi sebentar.`);
@@ -169,8 +184,12 @@ export async function listDriveFolder(folderId: string): Promise<DriveListing> {
   const html = await res.text();
   const title = decodeEntities(html.match(/<title>([^<]*)<\/title>/)?.[1] ?? "").trim();
 
-  if (!title || /sign in|error|not found/i.test(title)) {
-    throw new Error(
+  // Deteksi halaman login Google secara STRUCTURAL (form accounts.google.com),
+  // bukan regex judul bebas — folder bernama sah "Analisa Error 2024" tidak
+  // boleh tertolak palsu (audit 48-g-engine).
+  if (!title || html.includes("accounts.google.com")) {
+    throw new DriveAccessError(
+      "PRIVATE",
       "Folder Drive tidak bisa dibaca — pastikan dibagikan “Siapa saja yang memiliki link” akses Viewer.",
     );
   }
@@ -193,7 +212,7 @@ export async function listDriveFolder(folderId: string): Promise<DriveListing> {
   }
 
   if (entries.length === 0) {
-    throw new Error(`Folder Drive “${title}” kosong atau isinya tidak terbaca.`);
+    throw new DriveAccessError("EMPTY", `Folder Drive “${title}” kosong atau isinya tidak terbaca.`);
   }
   return { folderId, folderName: title, entries };
 }
@@ -210,6 +229,11 @@ export type DriveCollect = {
   files: DriveFileRef[];
   skippedNonExcel: number;
   subfolderCount: number;
+  /** Batas tercapai — pelancongan DIPOTONG, dilaporkan jujur (audit 48-g-engine). */
+  truncatedFiles: boolean;
+  truncatedFolders: boolean;
+  /** Subfolder yang listing-nya gagal dibaca (dilaporkan, tidak fatal). */
+  failedSubfolders: string[];
 };
 
 /**
@@ -230,6 +254,7 @@ export async function collectDriveFiles(
   const files: DriveFileRef[] = [];
   const subfolders: DriveEntry[] = [];
   let skippedNonExcel = 0;
+  let truncatedFiles = false;
 
   for (const e of root.entries) {
     if (e.isFolder) {
@@ -240,6 +265,10 @@ export async function collectDriveFiles(
       skippedNonExcel += 1;
       continue;
     }
+    if (files.length >= limits.maxFiles) {
+      truncatedFiles = true;
+      break;
+    }
     files.push({ id: e.id, path: e.name, name: e.name, modifiedMs: e.modifiedMs });
   }
 
@@ -248,34 +277,53 @@ export async function collectDriveFiles(
     for (const f of files) f.path = `${canonicalName}/${f.name}`;
   }
 
-  // Rekursi subfolder (kedalaman 2: root + 1 level subfolder).
+  // Rekursi subfolder (kedalaman 2: root + 1 level subfolder), listing
+  // DIJALANKAN PARALEL (≤4) — listing beruntun 12×15 dtk bisa melewati
+  // maxDuration serverless (audit 48-g-engine).
   const walked = new Set<string>([folderId]);
+  const truncatedFolders = subfolders.length > limits.maxFolders;
+  const toWalk = subfolders.slice(0, limits.maxFolders);
+  const failedSubfolders: string[] = [];
   let subfolderCount = 0;
-  for (const sub of subfolders) {
-    if (files.length >= limits.maxFiles) break;
-    if (subfolderCount >= limits.maxFolders || walked.has(sub.id)) continue;
-    let subList: DriveListing;
-    try {
-      subList = await listDriveFolder(sub.id);
-    } catch {
-      skippedNonExcel += 0; // subfolder gagal dibaca → dilewati, tidak fatal
-      continue;
-    }
-    walked.add(sub.id);
-    subfolderCount += 1;
-    for (const e of subList.entries) {
-      if (e.isFolder) continue; // lebih dalam dari 2 level tidak di-walk
-      if (!EXCEL_RE.test(e.name)) {
-        skippedNonExcel += 1;
+
+  let cursor = 0;
+  const walkWorkers = Array.from({ length: Math.min(4, toWalk.length) }, async () => {
+    while (cursor < toWalk.length) {
+      if (files.length >= limits.maxFiles) {
+        truncatedFiles = true;
+        return;
+      }
+      const sub = toWalk[cursor]!;
+      cursor += 1;
+      if (walked.has(sub.id)) continue;
+      let subList: DriveListing;
+      try {
+        subList = await listDriveFolder(sub.id);
+      } catch {
+        failedSubfolders.push(sub.name); // dilaporkan jujur, tidak fatal
         continue;
       }
-      if (files.length >= limits.maxFiles) break;
-      files.push({ id: e.id, path: `${sub.name}/${e.name}`, name: e.name, modifiedMs: e.modifiedMs });
+      walked.add(sub.id);
+      subfolderCount += 1;
+      for (const e of subList.entries) {
+        if (e.isFolder) continue; // lebih dalam dari 2 level tidak di-walk
+        if (!EXCEL_RE.test(e.name)) {
+          skippedNonExcel += 1;
+          continue;
+        }
+        if (files.length >= limits.maxFiles) {
+          truncatedFiles = true;
+          break;
+        }
+        files.push({ id: e.id, path: `${sub.name}/${e.name}`, name: e.name, modifiedMs: e.modifiedMs });
+      }
     }
-  }
+  });
+  await Promise.all(walkWorkers);
 
   if (files.length === 0) {
-    throw new Error(
+    throw new DriveAccessError(
+      "EMPTY",
       `Tidak ada file Excel (.xlsx/.xls/.xlsb) di folder Drive “${root.folderName}”.`,
     );
   }
@@ -286,6 +334,9 @@ export async function collectDriveFiles(
     files,
     skippedNonExcel,
     subfolderCount,
+    truncatedFiles,
+    truncatedFolders,
+    failedSubfolders,
   };
 }
 
@@ -300,9 +351,10 @@ export type DriveDedupe = {
 };
 
 /** Drive mengizinkan beberapa file bernama sama dalam satu folder.
- *  Kebijakan: SEMUA punya tanggal → terbaru menang; jika ada yang tak
- *  bertanggal → semua dipertahankan dengan akhiran __2, __3 (tak pernah
- *  membuang data diam-diam). */
+ *  Kebijakan: SEMUA punya tanggal → terbaru menang (lama dilaporkan); jika
+ *  ada yang tak bertanggal → semua dipertahankan. Setelahnya PASS KEUNIKAN
+ *  GLOBAL lintas grup (audit 48-g-engine: grup “x.xlsx” vs file asli
+ *  “x__2.xlsx” bisa berkolisi → writer menimpa senyap). */
 export function dedupeDriveFiles(files: DriveFileRef[]): DriveDedupe {
   const groups = new Map<string, DriveFileRef[]>();
   for (const f of files) {
@@ -311,34 +363,45 @@ export function dedupeDriveFiles(files: DriveFileRef[]): DriveDedupe {
     groups.set(f.path, list);
   }
 
-  const kept: DriveFileRef[] = [];
+  type Picked = { ref: DriveFileRef; path: string };
+  const picked: Picked[] = [];
   const skipped: { path: string; reason: string }[] = [];
-  const suffixed: string[] = [];
 
   for (const [path, list] of groups) {
     if (list.length === 1) {
-      kept.push(list[0]!);
+      picked.push({ ref: list[0]!, path });
       continue;
     }
     const allDated = list.every((f) => f.modifiedMs !== null);
     if (allDated) {
       const sorted = [...list].sort((a, b) => (b.modifiedMs ?? 0) - (a.modifiedMs ?? 0));
-      kept.push(sorted[0]!);
+      picked.push({ ref: sorted[0]!, path });
       for (const f of sorted.slice(1)) {
         const when = f.modifiedMs ? new Date(f.modifiedMs).toISOString().slice(0, 10) : "?";
         skipped.push({ path, reason: `versi ${when} (lebih lama) dilewati — ${f.id}` });
       }
     } else {
-      const used = new Map<string, number>();
-      for (const f of list) {
-        const dot = f.path.lastIndexOf(".");
-        const n = (used.get(f.path) ?? 1) + 1;
-        used.set(f.path, n);
-        const suffixedPath = n === 1 ? f.path : `${f.path.slice(0, dot)}__${n}${f.path.slice(dot)}`;
-        if (n > 1) suffixed.push(suffixedPath);
-        kept.push({ ...f, path: suffixedPath });
-      }
+      for (const f of list) picked.push({ ref: f, path });
     }
+  }
+
+  // Pass keunikan GLOBAL: path final tidak boleh dipakai dua file apa pun.
+  const used = new Set<string>();
+  const kept: DriveFileRef[] = [];
+  const suffixed: string[] = [];
+  for (const p of picked) {
+    let out = p.path;
+    if (used.has(out)) {
+      const dot = out.lastIndexOf(".");
+      const base = dot > 0 ? out.slice(0, dot) : out;
+      const ext = dot > 0 ? out.slice(dot) : "";
+      let n = 2;
+      while (used.has(`${base}__${n}${ext}`)) n += 1;
+      out = `${base}__${n}${ext}`;
+      suffixed.push(out);
+    }
+    used.add(out);
+    kept.push({ ...p.ref, path: out });
   }
   return { kept, skipped, suffixed };
 }
@@ -384,8 +447,19 @@ export async function downloadDriveFile(
     });
 
   let res = await doFetch(url);
-  if (!res.ok && res.status !== 200) {
+  if (res.status === 404) {
+    throw new DriveFileBadError("File tidak ditemukan di Drive (404) — mungkin dihapus.");
+  }
+  if (!res.ok) {
     throw new Error(`Drive menolak unduhan (HTTP ${res.status}).`);
+  }
+  // Cek Content-Length SEBELUM buffering (audit 48-g-api/48-g-engine: file
+  // raksasa bisa OOM lambda sebelum batas per-file sempat diuji).
+  const declared = Number(res.headers.get("content-length") ?? "0");
+  if (declared > opts.maxBytes) {
+    throw new Error(
+      `File ${(declared / 1024 / 1024).toFixed(0)} MB — melebihi batas ${(opts.maxBytes / 1024 / 1024).toFixed(0)} MB per file.`,
+    );
   }
   let buf = new Uint8Array(await res.arrayBuffer());
 

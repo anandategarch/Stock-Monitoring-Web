@@ -129,9 +129,16 @@ export async function POST(req: NextRequest) {
       status: "PENDING",
       periodFirstSeen: body.periodKey,
       currentPeriodKey: body.periodKey,
-      currentQtyDeviasi: body.qtyDeviasi ?? null,
-      currentNominal: body.nominal ?? null,
-      currentHarga: body.harga ?? null,
+      // Koersi numerik defensif (audit 48-g-api): input bukan angka → null,
+      // bukan PrismaClientValidationError 500.
+      currentQtyDeviasi:
+        typeof body.qtyDeviasi === "number" && Number.isFinite(body.qtyDeviasi)
+          ? body.qtyDeviasi
+          : null,
+      currentNominal:
+        typeof body.nominal === "number" && Number.isFinite(body.nominal) ? body.nominal : null,
+      currentHarga:
+        typeof body.harga === "number" && Number.isFinite(body.harga) ? body.harga : null,
       note: clampString(body.note, 500),
     },
   });

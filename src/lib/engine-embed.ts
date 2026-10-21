@@ -27,15 +27,20 @@ export function embeddedDemoProcess(req: EngineProcessRequest): EngineResult {
   if (!validated.ok) throw new Error(validated.error);
   const result = generateDemoResult(validated.value);
   result.engineName = EMBED_ENGINE_NAME;
-  result.logs = [
-    ...result.logs,
-    {
-      ts: new Date().toISOString(),
-      level: "INFO" as const,
-      message:
-        "Diproses oleh engine demo EMBEDDED (fallback in-process) — service demo di SM_ENGINE_URL " +
-        "tidak terjangkau. Generator identik dengan mini-services/engine, hasil deterministik (FR-12).",
-    },
-  ];
+  const note = {
+    ts: new Date().toISOString(),
+    level: "INFO" as const,
+    message:
+      "Diproses oleh engine demo EMBEDDED (fallback in-process) — service demo di SM_ENGINE_URL " +
+      "tidak terjangkau. Generator identik dengan mini-services/engine, hasil deterministik (FR-12).",
+  };
+  // Sisipkan SEBELUM baris penutup "(N baris log)" — kalau di-append SETELAHNYA,
+  // hitungan baris penutup off-by-one (audit 48-g-engine). Baris tetap INFO ⇒ §82b sahih.
+  const last = result.logs[result.logs.length - 1];
+  if (last && /\(\d+ baris log\)$/.test(last.message)) {
+    result.logs = [...result.logs.slice(0, -1), note, last];
+  } else {
+    result.logs = [...result.logs, note];
+  }
   return result;
 }

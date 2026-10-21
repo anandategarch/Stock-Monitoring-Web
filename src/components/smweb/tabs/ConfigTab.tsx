@@ -354,7 +354,7 @@ function PeriodSection({ snapshotId }: { snapshotId: string | null }) {
                     </TableCell>
                     <TableCell>
                       {s.state === "ACTIVE" ? (
-                        <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">ACTIVE</Badge>
+                        <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">ACTIVE</Badge>
                       ) : (
                         <Badge variant="secondary">SUPERSEDED</Badge>
                       )}

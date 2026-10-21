@@ -12,7 +12,7 @@ import path from "path";
 import { bundleDir, computeFolderStats, saveBundleMeta } from "@/lib/bundles";
 import type { BundleManifest } from "@/lib/types";
 
-const EXCEL_RE = /\.(xlsx|xls|xlsb)$/i;
+const EXCEL_RE = /\.(xlsx|xls|xlsb|xlsm)$/i; // xlsm: engine FastAPI juga membacanya (audit 48-g-engine)
 
 export class BundleEmptyError extends Error {
   constructor() {
@@ -20,6 +20,14 @@ export class BundleEmptyError extends Error {
       "Tidak ada file Excel (.xlsx/.xls/.xlsb) di dalam bundle — pastikan ini bundle export Accurate (struktur 14 folder config.json).",
     );
     this.name = "BundleEmptyError";
+  }
+}
+
+/** Batas kumulatif file Excel terlampaui (anti zip-bomb, audit 48-g-api). */
+export class BundleLimitError extends Error {
+  constructor(maxBytes: number) {
+    super(`Total file Excel melebihi batas ${(maxBytes / 1024 / 1024).toFixed(0)} MB — bundle dilepas.`);
+    this.name = "BundleLimitError";
   }
 }
 
@@ -35,14 +43,17 @@ export type BundleWriter = {
     skippedEntriesExtra?: number;
     extras?: Pick<
       BundleManifest,
-      "skippedDuplicates" | "suffixedDuplicates" | "driveFolders" | "skippedFiles"
+      "skippedDuplicates" | "suffixedDuplicates" | "driveFolders" | "skippedFiles" | "driveNotices"
     >;
   }): Promise<BundleManifest>;
   /** Buang bundle yang setengah jadi (folder + seluruh isinya). */
   abort(): Promise<void>;
 };
 
-export async function createBundleWriter(bundleId: string): Promise<BundleWriter> {
+export async function createBundleWriter(
+  bundleId: string,
+  opts: { maxFileBytes?: number; maxTotalBytes?: number } = {},
+): Promise<BundleWriter> {
   const dir = bundleDir(bundleId); // validasi bundleId sekali di sini
   await fs.mkdir(dir, { recursive: true });
 
@@ -83,6 +94,15 @@ export async function createBundleWriter(bundleId: string): Promise<BundleWriter
         skippedEntries += 1;
         return;
       }
+      // Batas ukuran (anti zip-bomb / file raksasa — audit 48-g-api): entri
+      // per-file kelewat besar dihitung dilewati; total kumulatif → gagal jujur.
+      if (opts.maxFileBytes !== undefined && data.byteLength > opts.maxFileBytes) {
+        skippedEntries += 1;
+        return;
+      }
+      if (opts.maxTotalBytes !== undefined && totalBytes + data.byteLength > opts.maxTotalBytes) {
+        throw new BundleLimitError(opts.maxTotalBytes);
+      }
       await fs.mkdir(path.dirname(dest), { recursive: true });
       await fs.writeFile(dest, data);
       fileCount += 1;
@@ -110,6 +130,7 @@ export async function createBundleWriter(bundleId: string): Promise<BundleWriter
         ...(meta.extras?.suffixedDuplicates ? { suffixedDuplicates: meta.extras.suffixedDuplicates } : {}),
         ...(meta.extras?.driveFolders ? { driveFolders: meta.extras.driveFolders } : {}),
         ...(meta.extras?.skippedFiles ? { skippedFiles: meta.extras.skippedFiles } : {}),
+        ...(meta.extras?.driveNotices ? { driveNotices: meta.extras.driveNotices } : {}),
       };
       await saveBundleMeta(manifest);
       return manifest;

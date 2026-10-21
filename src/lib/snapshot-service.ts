@@ -5,6 +5,7 @@
 // Snapshot immutable: periode lama → SUPERSEDED (tetap tersimpan).
 // ============================================================
 import { db } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { engineProcess, ENGINE_PROD_URL } from "@/lib/engine";
 import { resolveBundlePath } from "@/lib/bundles";
 import { stableFingerprint } from "@/lib/fingerprint";
@@ -20,6 +21,11 @@ export function parseJsonSafe<T>(raw: string | null | undefined, fallback: T): T
   } catch {
     return fallback;
   }
+}
+
+/** True bila error = pelanggaran unique Prisma (P2002). */
+function isP2002(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
 }
 
 export interface RunParams {
@@ -193,22 +199,36 @@ export async function commitRun(runBatchId: string): Promise<{
 
   // Buat snapshot dulu dalam state BUILDING (belum terlihat), isi semua data,
   // baru promosikan ACTIVE. Gagal di tengah → hapus (cascade) + lempar error.
-  const snapshot = await db.periodSnapshot.create({
-    data: {
-      periodKey: run.periodKey,
-      runBatchId: run.id,
-      state: "BUILDING",
-      restoCount: summary.restoCount,
-      itemCount: summary.itemCount,
-      rowCount: summary.rowCount,
-      dayCount: summary.dayCount,
-      nominalTotal: summary.nominalTotal,
-      deviasiQtyTotal: summary.deviasiQtyTotal,
-      definitionVersion: result.definitionVersion,
-      paramsJson: JSON.stringify({ tanggalH: params.tanggalH, ambangAcrPct: params.ambangAcrPct }),
-      committedBy: ACTOR,
-    },
+  // Pra-bersih BUILDING yatim dari komit yang gagal sebelumnya (audit 48-g-data):
+  // tanpa ini, snapshot BUILDING tua menahan unique(runBatchId) selamanya.
+  await db.periodSnapshot.deleteMany({
+    where: { runBatchId: run.id, state: "BUILDING" },
   });
+
+  let snapshot;
+  try {
+    snapshot = await db.periodSnapshot.create({
+      data: {
+        periodKey: run.periodKey,
+        runBatchId: run.id,
+        state: "BUILDING",
+        restoCount: summary.restoCount,
+        itemCount: summary.itemCount,
+        rowCount: summary.rowCount,
+        dayCount: summary.dayCount,
+        nominalTotal: summary.nominalTotal,
+        deviasiQtyTotal: summary.deviasiQtyTotal,
+        definitionVersion: result.definitionVersion,
+        paramsJson: JSON.stringify({ tanggalH: params.tanggalH, ambangAcrPct: params.ambangAcrPct }),
+        committedBy: ACTOR,
+      },
+    });
+  } catch (err) {
+    if (isP2002(err)) {
+      throw new Error("Run ini sedang dikomit di permintaan lain — tunggu sebentar lalu cek lagi.");
+    }
+    throw err;
+  }
 
   try {
     const rows = mapRows(result, snapshot.id);
@@ -276,22 +296,33 @@ export async function commitRun(runBatchId: string): Promise<{
       }
     }
 
-    // Tautkan DQ issue run ini ke snapshot + promosikan ACTIVE + pensupersede periode lama
+    // Tautkan DQ issue run ini ke snapshot. Promosi ACTIVE + supersede periode
+    // lama + committedAt DIBUNGKUS SATU TRANSAKSI (audit 48-g-data): komit ganda
+    // konkuren dicek ulang DI DALAM transaksi — tak mungkin ada dua ACTIVE.
     await db.dQIssue.updateMany({ where: { runBatchId: run.id }, data: { snapshotId: snapshot.id } });
 
-    const supersededList = await db.periodSnapshot.findMany({
-      where: { periodKey: snapshot.periodKey, state: "ACTIVE", id: { not: snapshot.id } },
-      select: { id: true },
-    });
-    if (supersededList.length > 0) {
-      await db.periodSnapshot.updateMany({
-        where: { id: { in: supersededList.map((s) => s.id) } },
-        data: { state: "SUPERSEDED", supersededAt: new Date(), supersededById: snapshot.id },
+    const supersededList = await db.$transaction(async (tx) => {
+      const cur = await tx.runBatch.findUnique({
+        where: { id: run.id },
+        select: { committedAt: true },
       });
-    }
-
-    await db.periodSnapshot.update({ where: { id: snapshot.id }, data: { state: "ACTIVE" } });
-    await db.runBatch.update({ where: { id: run.id }, data: { committedAt: new Date() } });
+      if (cur?.committedAt) {
+        throw new Error("Run ini sudah dikomit sebelumnya.");
+      }
+      const toSupersede = await tx.periodSnapshot.findMany({
+        where: { periodKey: snapshot.periodKey, state: "ACTIVE", id: { not: snapshot.id } },
+        select: { id: true },
+      });
+      if (toSupersede.length > 0) {
+        await tx.periodSnapshot.updateMany({
+          where: { id: { in: toSupersede.map((s) => s.id) } },
+          data: { state: "SUPERSEDED", supersededAt: new Date(), supersededById: snapshot.id },
+        });
+      }
+      await tx.periodSnapshot.update({ where: { id: snapshot.id }, data: { state: "ACTIVE" } });
+      await tx.runBatch.update({ where: { id: run.id }, data: { committedAt: new Date() } });
+      return toSupersede;
+    });
 
     await audit("SNAPSHOT_COMMIT", "PeriodSnapshot", snapshot.id, {
       periodKey: snapshot.periodKey,
@@ -308,8 +339,11 @@ export async function commitRun(runBatchId: string): Promise<{
       definitionVersion: result.definitionVersion,
     };
   } catch (err) {
-    // NFR-3: kegagalan tidak boleh menyisakan snapshot setengah jadi
+    // NFR-3: kegagalan tidak boleh menyisakan snapshot setengah jadi.
+    // PriceHistory di-key runBatchId (bukan snapshotId, tak ikut cascade) —
+    // bersihkan juga, else komit ulang run yang sama P2002 selamanya (audit 48-g-data).
     await db.periodSnapshot.delete({ where: { id: snapshot.id } }).catch(() => undefined);
+    await db.priceHistory.deleteMany({ where: { runBatchId: run.id } }).catch(() => undefined);
     throw err;
   }
 }

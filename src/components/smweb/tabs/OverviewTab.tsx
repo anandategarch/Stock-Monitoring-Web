@@ -150,7 +150,13 @@ export function OverviewTab() {
                 <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${Math.round(v / 1000)}rb`} />
                 <Tooltip
                   formatter={(v: number | string) => fmtRp(Number(v))}
-                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                  contentStyle={{
+                    fontSize: 12,
+                    borderRadius: 8,
+                    backgroundColor: "var(--popover)",
+                    border: "1px solid var(--border)",
+                    color: "var(--popover-foreground)",
+                  }}
                 />
                 <Bar dataKey="nominal" name="Nominal" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -169,7 +175,13 @@ export function OverviewTab() {
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${Math.round(v / 1000)}rb`} />
                   <Tooltip
                     formatter={(v: number | string) => fmtRp(Number(v))}
-                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                    contentStyle={{
+                      fontSize: 12,
+                      borderRadius: 8,
+                      backgroundColor: "var(--popover)",
+                      border: "1px solid var(--border)",
+                      color: "var(--popover-foreground)",
+                    }}
                   />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   <Line type="monotone" dataKey="nominal" name="Nominal deviasi" stroke="var(--chart-1)" strokeWidth={2} dot />
@@ -207,7 +219,7 @@ export function OverviewTab() {
               </TableHeader>
               <TableBody>
                 {data.topDeviations.map((t) => (
-                  <TableRow key={`${t.restoCode}-${t.itemName}`}>
+                  <TableRow key={`${t.restoCode}|${t.itemName}|${t.satuan}`}>
                     <TableCell className="font-medium whitespace-nowrap">{t.restoCode}</TableCell>
                     <TableCell className="whitespace-nowrap">{t.itemName} <span className="text-muted-foreground">({t.satuan})</span></TableCell>
                     <TableCell className={`text-right cell-num ${signedQtyClass(t.qtyDeviasi)}`}>{fmtQty(t.qtyDeviasi)}</TableCell>
@@ -282,11 +294,13 @@ export function OverviewTab() {
       </div>
 
       <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-        {data.nominalDeltaPct !== null && data.nominalDeltaPct > 0 ? (
-          <TrendingUp className="h-3.5 w-3.5 text-rose-500" aria-hidden />
-        ) : (
-          <TrendingDown className="h-3.5 w-3.5 text-emerald-500" aria-hidden />
-        )}
+        {data.nominalDeltaPct !== null ? (
+          data.nominalDeltaPct > 0 ? (
+            <TrendingUp className="h-3.5 w-3.5 text-rose-500" aria-hidden />
+          ) : (
+            <TrendingDown className="h-3.5 w-3.5 text-emerald-500" aria-hidden />
+          )
+        ) : null}
         Perbandingan antar-periode dihitung dari snapshot database ({fmtPct(data.nominalDeltaPct)} untuk nominal) —
         menutup alur lama yang membandingkan file deviasi eksternal manual.
       </p>

@@ -108,6 +108,12 @@ export function computeFolderStats(entries: { path: string; bytes: number }[]): 
  * SATU folder pembungkus (mis. "9.NEW QUERY/") dan tak ada file di root,
  * turun satu level — struktur "14 folder langsung" maupun "satu folder
  * induk" dua-duanya diterima (FR-1).
+ *
+ * KECUALI bila folder tunggal itu bernama PERSIS folder kanonik (mis. tarikan
+ * Drive "1. DEVIASI WEEKLY"): jangan turun — RootPath = root bundle sehingga
+ * engine melihat "1. DEVIASI WEEKLY/" sebagai subfolder, KONSISTEN dengan
+ * computeFolderStats() yang menghitungnya ADA (audit 48-g-engine: tanpa ini
+ * manifest bilang 1/14 ADA padahal engine melihat 14 folder kosong → 0 baris).
  */
 export async function resolveBundlePath(bundleId: string): Promise<string> {
   const dir = bundleDir(bundleId);
@@ -117,8 +123,12 @@ export async function resolveBundlePath(bundleId: string): Promise<string> {
   }
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const filesAtRoot = entries.some((e) => e.isFile());
-  if (!filesAtRoot && entries.length === 1 && entries[0].isDirectory()) {
-    return path.join(dir, entries[0].name);
+  const singleDir = entries.length === 1 && entries[0].isDirectory() ? entries[0].name : null;
+  const singleIsCanonical =
+    singleDir !== null &&
+    FOLDER_TEMPLATE.some((t) => t.folderName.toLowerCase() === singleDir.toLowerCase());
+  if (!filesAtRoot && singleDir && !singleIsCanonical) {
+    return path.join(dir, singleDir);
   }
   return dir;
 }

@@ -36,14 +36,14 @@ const MODES: { value: Mode; label: string }[] = [
 function ArahBadge({ arah }: { arah: LaporanKomparasiRow["arah"] }) {
   if (arah === "NAIK") {
     return (
-      <Badge className="border-rose-300 bg-rose-100 text-rose-800 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-300">
+      <Badge className="border-rose-300 bg-rose-100 text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-300">
         ▲ NAIK
       </Badge>
     );
   }
   if (arah === "TURUN") {
     return (
-      <Badge className="border-emerald-300 bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-300">
+      <Badge className="border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-300">
         ▼ TURUN
       </Badge>
     );

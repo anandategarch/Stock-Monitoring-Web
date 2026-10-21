@@ -40,6 +40,7 @@ export async function GET() {
 
     const rows = await db.snapshotRow.findMany({
       where: { snapshotId: active.id },
+      orderBy: { day: "asc" }, // deterministik antar-request (audit 48-g-api)
       select: {
         restoCode: true, restoName: true, itemName: true, satuan: true, kategori: true,
         nominal: true, qtyDeviasi: true,
@@ -57,12 +58,21 @@ export async function GET() {
       if (r.nominal !== null) e.nominal += r.nominal;
       if (r.qtyDeviasi !== null) e.deviasiQty += r.qtyDeviasi;
 
+      // AKUMULASI per pasangan resto|barang|satuan (audit 48-g-ui: SnapshotRow
+      // grain = HARI — tanpa penjumlahan, nilai SATU HARI terakhir menimpa
+      // Σ bulan → KPI bisa salah tanda & magnitude).
       if (r.nominal !== null && Math.abs(r.nominal) > 0) {
-        perPair.set(`${r.restoCode}|${r.itemName}|${r.satuan}`, {
-          restoCode: r.restoCode, restoName: r.restoName, itemName: r.itemName,
-          satuan: r.satuan, kategori: r.kategori, nominal: r.nominal,
-          qtyDeviasi: r.qtyDeviasi ?? 0,
-        });
+        const pairKey = `${r.restoCode}|${r.itemName}|${r.satuan}`;
+        let p = perPair.get(pairKey);
+        if (!p) {
+          p = {
+            restoCode: r.restoCode, restoName: r.restoName, itemName: r.itemName,
+            satuan: r.satuan, kategori: r.kategori, nominal: 0, qtyDeviasi: 0,
+          };
+          perPair.set(pairKey, p);
+        }
+        p.nominal += r.nominal;
+        p.qtyDeviasi += r.qtyDeviasi ?? 0;
       }
     }
 

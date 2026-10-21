@@ -71,7 +71,16 @@ export default function Page() {
     [activeSnapshots],
   );
 
-  const effectivePeriodKey = periodKey ?? periodOptions[0]?.value ?? null;
+  // periodKey tersimpan (sessionStorage) bisa basi — snapshot-nya sudah
+  // dihapus/SUPERSEDED. Validasi terhadap opsi yang ADA; jatuh ke yang
+  // pertama agar tab tidak menampilkan "belum ada snapshot" palsu (audit 48-g-ui).
+  const effectivePeriodKey = useMemo(
+    () =>
+      periodOptions.some((p) => p.value === periodKey)
+        ? periodKey
+        : (periodOptions[0]?.value ?? null),
+    [periodKey, periodOptions],
+  );
 
   const activeSnapshot = useMemo(
     () => activeSnapshots.find((s) => s.periodKey === effectivePeriodKey) ?? null,
@@ -94,7 +103,7 @@ export default function Page() {
               <div className="min-w-0">
                 <p className="font-semibold leading-tight truncate">Stock Monitoring Web</p>
                 <p className="text-[11px] text-muted-foreground leading-tight truncate hidden sm:block">
-                  SM-WEB · Fase 0–1 · PRD v1.1 · definisi 3.9.71-noSI
+                  SM-WEB · PRD v1.1 · definisi 3.9.71-noSI
                 </p>
               </div>
             </div>
@@ -195,7 +204,7 @@ export default function Page() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1.5 text-xs text-muted-foreground">
             <p className="flex items-center gap-1.5">
               <PackageSearch className="h-3.5 w-3.5" aria-hidden />
-              SM-WEB v0.1 — Fase 0–1 (sandbox) · engine DEMO (data sintetis, paritas golden-file menunggu FastAPI)
+              SM-WEB v0.1 · PRD v1.1 · definisi 3.9.71-noSI · ingest ZIP / folder langsung / Google Drive
             </p>
             <p>
               Snapshot permanen per periode · 9 label CEK · INV missing≠0 · single-user (D-6) ·

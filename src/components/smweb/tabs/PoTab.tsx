@@ -2,7 +2,7 @@
 // + anotasi "↳ Status" per PO, filter cabang/status persist (FR-36).
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Database, FileWarning, ShoppingCart } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { usePo } from "@/hooks/use-sm-api";
+import { useDebounced } from "@/hooks/use-debounced";
 import { EmptyState } from "@/components/smweb/empty-state";
 import { fmtInt, fmtQty } from "@/lib/format";
 import type { PoHeaderDto } from "@/lib/types";
@@ -38,22 +39,12 @@ function PoStatusBadge({ status }: { status: string }) {
   }
   if (s === "selesai") {
     return (
-      <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">
+      <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">
         {status}
       </Badge>
     );
   }
   return <Badge variant="secondary">{status}</Badge>;
-}
-
-/** Debounce kecil untuk input pencarian — mencegah 1 request per ketikan. */
-function useDebounced<T>(value: T, delayMs = 300): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(t);
-  }, [value, delayMs]);
-  return debounced;
 }
 
 export default function PoTab({ snapshotId }: { snapshotId: string | null }) {

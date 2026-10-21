@@ -333,6 +333,8 @@ export interface BundleManifest {
   driveFolders?: { folderName: string; folderKey: string | null; fileCount: number }[];
   /** File Drive yang DILEWATI saat ditarik (rusak/bukan Excel/0 byte) — jujur. */
   skippedFiles?: { path: string; reason: string }[];
+  /** Pemotongan batas / subfolder gagal dibaca saat tarikan Drive — jujur. */
+  driveNotices?: string[];
 }
 
 /** Link folder Google Drive tersimpan — "biar ingat" (FR-1). */
@@ -343,6 +345,7 @@ export interface DriveFolderLinkDto {
   folderName: string;
   folderKey: string | null;
   fileCount: number;
+  totalBytes: number;
   lastCheckedAt: string | null;
   lastUsedAt: string | null;
   createdAt: string;

@@ -17,7 +17,7 @@
 // ============================================================
 import { zipSync } from "fflate";
 
-const EXCEL_RE = /\.(xlsx|xls|xlsb)$/i;
+const EXCEL_RE = /\.(xlsx|xls|xlsb|xlsm)$/i; // xlsm: engine FastAPI juga membacanya (audit 48-g-engine)
 
 /** Batas aman sisi klien: server menerima ZIP ≤ 400 MB, dan ZIP store-mode
  * ukurannya ≈ jumlah file Excel + overhead kecil → 380 MB aman. */
@@ -88,6 +88,9 @@ export async function zipPickedFolder(
     data[rel] = new Uint8Array(await file.arrayBuffer());
     onRead?.(i + 1, total);
   }
+  // Yield dulu supaya label "Membungkus ZIP…" sempat tergambar — zipSync
+  // mengeblok main thread hingga beberapa detik untuk folder besar (audit 48-g-ui).
+  await new Promise((resolve) => setTimeout(resolve, 0));
   const zipped = zipSync(data, { level: 0 });
   return new File([zipped], `${scan.rootName || "bundle-export"}.zip`, {
     type: "application/zip",

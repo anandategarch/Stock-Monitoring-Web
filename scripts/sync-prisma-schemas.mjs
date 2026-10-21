@@ -26,6 +26,14 @@ if (!existsSync(canonicalPath)) {
 
 const canonical = readFileSync(canonicalPath, "utf8");
 
+// Guard fail-fast — aturan portabilitas §6 ARCHITECTURE.md: kanonik dilarang
+// memakai atribut native @db.* (cermin SQLite tidak bisa menerjemahkannya).
+// Komentar // dihapus dulu agar catatan "tanpa @db.*" di header skema sah
+// tidak memicu guard — hanya atribut aktif yang dianggap pelanggaran.
+if (canonical.replace(/\/\/[^\n]*/g, "").includes("@db.")) {
+  throw new Error("Skema kanonik memakai @db.* — dilarang (aturan portabilitas SQLite↔Postgres).");
+}
+
 // Kanonik WAJIB provider postgresql — cermin sqlite hanya boleh lahir
 // dari kanonik yang benar (mencegah sinkronisasi arah terbalik).
 if (!/provider\s*=\s*"postgresql"/.test(canonical)) {

@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { processRun } from "@/lib/snapshot-service";
 import { clampString, parseIntInRange, isPeriodKey } from "@/lib/validate";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// Serverless: run produksi atas bundle real bisa >10 dtk (audit 48-g-engine;
+// timeout klien engine 600 dtk — lambda default 10 dtk akan membunuhnya duluan).
+export const maxDuration = 60;
 
 /** POST /api/ingest/process — jalankan engine, simpan pratinjau run (BELUM komit, FR-4). */
 export async function POST(req: NextRequest) {
@@ -71,7 +75,17 @@ export async function POST(req: NextRequest) {
       durationMs: result.durationMs,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Gagal memproses run.";
-    return NextResponse.json({ error: message }, { status: 502 });
+    const isPrisma =
+      err instanceof Prisma.PrismaClientKnownRequestError ||
+      err instanceof Prisma.PrismaClientValidationError;
+    const message = err instanceof Error && !isPrisma ? err.message : "Gagal memproses run.";
+    // Samakan pemetaan dengan /commit (audit 48-g-api): salah-input 4xx,
+    // bundle hilang 404, sisanya 502.
+    const status = message.includes("tidak ditemukan")
+      ? 404
+      : message.includes("tidak valid") || message.includes("wajib")
+        ? 422
+        : 502;
+    return NextResponse.json({ error: message }, { status });
   }
 }

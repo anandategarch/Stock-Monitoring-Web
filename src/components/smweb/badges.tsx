@@ -12,13 +12,13 @@ import type { AuditNote, CekLabel, DqSeverity } from "@/lib/types";
 /** Badge status akhir run — paritas 3 status desktop (§82b). */
 export function RunStatusBadge({ status }: { status: string }) {
   if (status.startsWith("SELESAI_DENGAN")) {
-    return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 border-amber-300 dark:border-amber-500/40 hover:bg-amber-100">⚠ SELESAI DENGAN PERINGATAN</Badge>;
+    return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 border-amber-300 dark:border-amber-500/40">⚠ SELESAI DENGAN PERINGATAN</Badge>;
   }
   if (status.startsWith("SELESAI_PARSIAL") || status === "GAGAL") {
     return <Badge variant="destructive">✖ {status === "GAGAL" ? "GAGAL" : "SELESAI PARSIAL"}</Badge>;
   }
   if (status === "SELESAI") {
-    return <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">✓ SELESAI</Badge>;
+    return <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">✓ SELESAI</Badge>;
   }
   return <Badge variant="secondary">{status}</Badge>;
 }
@@ -26,7 +26,7 @@ export function RunStatusBadge({ status }: { status: string }) {
 export function DqSeverityBadge({ severity }: { severity: DqSeverity }) {
   if (severity === "ERROR") return <Badge variant="destructive">ERROR</Badge>;
   if (severity === "WARNING") {
-    return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 border-amber-300 dark:border-amber-500/40 hover:bg-amber-100">WARNING</Badge>;
+    return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 border-amber-300 dark:border-amber-500/40">WARNING</Badge>;
   }
   return <Badge variant="secondary">INFO</Badge>;
 }
@@ -37,10 +37,10 @@ export function CaseStatusBadge({ status }: { status: string }) {
     return <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300">{label}</Badge>;
   }
   if (status === "DIPROSES") {
-    return <Badge className="bg-teal-100 text-teal-800 dark:bg-teal-500/15 dark:text-teal-300 border-teal-300 dark:border-teal-500/40 hover:bg-teal-100">{label}</Badge>;
+    return <Badge className="bg-teal-100 text-teal-800 dark:bg-teal-500/15 dark:text-teal-300 border-teal-300 dark:border-teal-500/40">{label}</Badge>;
   }
   if (status === "SELESAI") {
-    return <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40 hover:bg-emerald-100">{label}</Badge>;
+    return <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">{label}</Badge>;
   }
   return <Badge variant="secondary">{label}</Badge>;
 }

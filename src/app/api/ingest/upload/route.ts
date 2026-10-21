@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { unzipSync } from "fflate";
-import { BundleEmptyError, createBundleWriter } from "@/lib/ingest-bundle";
+import { BundleEmptyError, BundleLimitError, createBundleWriter } from "@/lib/ingest-bundle";
 import { BUNDLES_DIR, FOLDER_TEMPLATE } from "@/lib/bundles";
+import { db } from "@/lib/db";
 import path from "path";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const MAX_ZIP_BYTES = 400 * 1024 * 1024; // R-10: batas jelas di FR-1
+const MAX_FILE_BYTES = 60 * 1024 * 1024; // batas per-entri Excel (paritas jalur Drive)
 
 /**
  * POST /api/ingest/upload (FR-1) — unggah ZIP bundle export mentah Accurate.
@@ -49,19 +51,39 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "ZIP tidak dapat dibaca (rusak atau bukan zip)." }, { status: 422 });
   }
 
-  const writer = await createBundleWriter(randomUUID());
+  const writer = await createBundleWriter(randomUUID(), {
+    maxFileBytes: MAX_FILE_BYTES,
+    maxTotalBytes: MAX_ZIP_BYTES,
+  });
   try {
     for (const [name, data] of Object.entries(entries)) {
       await writer.write(name, data);
     }
     const manifest = await writer.finish({ name: file.name.replace(/\.zip$/i, "") });
+    // NFR-4: unggahan bundle juga tercatat AuditLog (audit 48-g-api — satu-satunya
+    // aksi tulis filesystem yang tadinya bolong; manifest di /tmp ephemeral).
+    await db.auditLog.create({
+      data: {
+        action: "BUNDLE_UPLOAD",
+        entity: "BundleManifest",
+        entityId: manifest.bundleId,
+        detailJson: JSON.stringify({
+          bundleId: manifest.bundleId,
+          name: manifest.name,
+          fileCount: manifest.fileCount,
+          totalBytes: manifest.totalBytes,
+          skippedEntries: manifest.skippedEntries,
+        }),
+        actor: "analyst",
+      },
+    });
     return NextResponse.json(manifest);
   } catch (err) {
     await writer.abort();
-    if (err instanceof BundleEmptyError) {
+    if (err instanceof BundleEmptyError || err instanceof BundleLimitError) {
       return NextResponse.json({ error: err.message }, { status: 422 });
     }
-    const message = err instanceof Error ? err.message : "Gagal mengekstrak bundle.";
+    const message = err instanceof Error && !/EACCES|ENOENT|EEXIST|\/tmp\/|\/home\//i.test(err.message) ? err.message : "Gagal mengekstrak bundle.";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

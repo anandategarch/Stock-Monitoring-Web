@@ -21,6 +21,7 @@ import io
 import json
 import os
 import re
+import secrets
 import sys
 import tempfile
 import time
@@ -28,7 +29,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.responses import JSONResponse
 
 _SERVICE_DIR = Path(__file__).resolve().parent
@@ -47,6 +48,19 @@ _LOCK = threading.Lock()
 _LAST = {"at": None, "durationMs": None, "status": None}  # hanya utk /health
 
 _PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+# ---- Guard opsional (audit 48-g-engine) ----
+# SM_ENGINE_TOKEN: bila diisi, /process menolak panggilan tanpa header
+# x-engine-token yang cocok (perbandingan konstan) — mesin yang terpapar di
+# jaringan tidak bisa dipakai membaca bundlePath arbitrer.
+# SM_ENGINE_ALLOWED_ROOTS: bila diisi (path absolut dipisah koma), bundlePath
+# wajib berada di bawah salah satunya.
+_ENGINE_TOKEN = os.environ.get("SM_ENGINE_TOKEN", "").strip()
+_ALLOWED_ROOTS = [
+    os.path.abspath(p.strip())
+    for p in os.environ.get("SM_ENGINE_ALLOWED_ROOTS", "").split(",")
+    if p.strip()
+]
 
 with open(_SERVICE_DIR / "config_template.json", "r", encoding="utf-8") as f:
     _CONFIG_TEMPLATE = json.load(f)
@@ -76,7 +90,11 @@ def health():
 
 
 @app.post("/process")
-def process(body: dict):
+def process(body: dict, x_engine_token: str = Header(default="")):
+    # ---- Guard shared-secret opsional (audit 48-g-engine) ----
+    if _ENGINE_TOKEN and not secrets.compare_digest(x_engine_token, _ENGINE_TOKEN):
+        return _err(401, "Token engine tidak valid (header x-engine-token).")
+
     # ---- Validasi request (mirror engine demo — 422 + {"error"}) ----
     if not isinstance(body, dict):
         return _err(422, "Body harus objek JSON.")
@@ -107,6 +125,12 @@ def process(body: dict):
     bundle_path = os.path.abspath(bundle_path)
     if not os.path.isdir(bundle_path):
         return _err(422, f"bundlePath tidak ditemukan: {bundle_path}")
+    if _ALLOWED_ROOTS and not any(
+        bundle_path == root or bundle_path.startswith(root + os.sep)
+        for root in _ALLOWED_ROOTS
+    ):
+        return _err(422, "bundlePath berada di luar direktori yang diizinkan "
+                        "(SM_ENGINE_ALLOWED_ROOTS).")
 
     bundle_name = body.get("bundleName")
     if bundle_name is not None and not isinstance(bundle_name, str):
