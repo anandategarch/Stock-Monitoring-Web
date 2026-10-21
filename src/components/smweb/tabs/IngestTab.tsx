@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState, type InputHTMLAttributes } from "react";
 import {
-  AlertTriangle, CheckCircle2, Cloud, CloudDownload, Database, FileWarning, FolderOpen, FolderTree,
+  AlertTriangle, CheckCircle2, Cloud, CloudDownload, Database, Eye, FileWarning, FolderOpen, FolderTree,
   Loader2, PackageOpen, Play, Rocket, Save, Trash2, UploadCloud, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -66,6 +66,7 @@ export function IngestTab() {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [driveUrl, setDriveUrl] = useState("");
   const [driveInclude, setDriveInclude] = useState<Record<string, boolean>>({});
+  const [drivePendingAction, setDrivePendingAction] = useState<"process" | "preview" | null>(null);
 
   const process = useIngestProcess();
   const commit = useIngestCommit();
@@ -190,19 +191,37 @@ export function IngestTab() {
     });
   };
 
-  const onDrivePull = () => {
+  // Satu jalur untuk dua aksi Drive: "process" (unduh file → bundle) dan
+  // "preview" (listing Drive saja — Pratinjau Cepat, tanpa kuota serverless).
+  // drivePendingAction memisahkan label spinner dua tombol yang berbagi
+  // satu mutasi (isPending).
+  const runDriveAction = (action: "process" | "preview") => {
     if (includedDriveIds.length === 0) {
       toast.error("Centang minimal satu link Drive yang mau ditarik.");
       return;
     }
+    setDrivePendingAction(action);
     drivePull.mutate(
-      { ids: includedDriveIds },
+      { ids: includedDriveIds, action },
       {
-        onSuccess: (out) => applyManifest(out, "ditarik dari Drive"),
-        onError: (err) => toast.error(err instanceof Error ? err.message : "Gagal menarik dari Drive."),
+        onSuccess: (out) =>
+          action === "preview"
+            ? applyManifest(out, "dipratinjau cepat (tanpa unduh)")
+            : applyManifest(out, "ditarik dari Drive"),
+        onError: (err) =>
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : action === "preview"
+                ? "Gagal mempratinjau folder Drive."
+                : "Gagal menarik dari Drive.",
+          ),
+        onSettled: () => setDrivePendingAction(null),
       },
     );
   };
+  const onDrivePull = () => runDriveAction("process");
+  const onDrivePreview = () => runDriveAction("preview");
 
   const onProcess = () => {
     const h = Number(tanggalH);
@@ -217,6 +236,12 @@ export function IngestTab() {
     }
     if (mode === "bundle" && !manifest) {
       toast.error("Mode produksi: unggah ZIP bundle dulu sebelum memproses (FR-1).");
+      return;
+    }
+    if (mode === "bundle" && manifest?.previewOnly) {
+      toast.error(
+        "Ini hanya pratinjau cepat — bundle tidak diunduh. Tekan “Tarik → Bundle” (di instalasi lokal) atau unggah ZIP untuk memproses.",
+      );
       return;
     }
     process.mutate(
@@ -409,7 +434,8 @@ export function IngestTab() {
                   disimpan &amp; bundle bisa ditarik, tetapi <strong>Proses Bundle data asli</strong>
                   hanya bisa dijalankan di instalasi lokal (sandbox/PC) tempat engine :3031 hidup.
                   Batas tarikan serverless: ±60 detik dan kuota disk sementara — untuk folder
-                  besar, tarik di instalasi lokal.
+                  besar, pakai <strong>Pratinjau Cepat</strong> di sini (tanpa unduh) atau tarik
+                  penuh di instalasi lokal.
                 </span>
               </p>
             )}
@@ -511,7 +537,7 @@ export function IngestTab() {
                     disabled={drivePull.isPending || includedDriveIds.length === 0}
                     className="gap-2"
                   >
-                    {drivePull.isPending ? (
+                    {drivePull.isPending && drivePendingAction === "process" ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Menarik{" "}
                         {includedDriveIds.length} folder dari Drive…
@@ -522,10 +548,28 @@ export function IngestTab() {
                       </>
                     )}
                   </Button>
-                  <p className="text-xs text-muted-foreground">
-                    Manifest muncul di bawah — lanjutkan dengan “Proses Bundle” seperti biasa.
-                    Maksimal 16 link per tarikan (semua folder kanonik sekaligus, seperti aplikasi
-                    desktop) · batas total 400 MB.
+                  <Button
+                    variant="outline"
+                    onClick={onDrivePreview}
+                    disabled={drivePull.isPending || includedDriveIds.length === 0}
+                    className="gap-2"
+                    aria-describedby="drive-preview-hint"
+                  >
+                    {drivePull.isPending && drivePendingAction === "preview" ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Mempratinjau…
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="h-4 w-4" aria-hidden /> Pratinjau Cepat
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-muted-foreground flex-1 min-w-64" id="drive-preview-hint">
+                    <strong>Tarik</strong> mengunduh file → bundle (maks 16 link · 400 MB — di
+                    serverless dibatasi ±60 dtk &amp; kuota disk). <strong>Pratinjau Cepat</strong>
+                    hanya membaca listing Drive — tanpa unduhan, aman untuk folder besar di
+                    serverless. Manifest muncul di bawah.
                   </p>
                 </div>
               </div>
@@ -540,9 +584,22 @@ export function IngestTab() {
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">
                 <strong>{manifest.name}</strong> — {manifest.fileCount} file Excel ·{" "}
-                {(manifest.totalBytes / 1024 / 1024).toFixed(2)} MB
+                {manifest.previewOnly
+                  ? "pratinjau cepat · total byte tidak dihitung"
+                  : `${(manifest.totalBytes / 1024 / 1024).toFixed(2)} MB`}
                 {manifest.skippedEntries > 0 ? ` · ${manifest.skippedEntries} entri non-Excel/terlalu besar dilewati` : ""}
               </p>
+              {manifest.previewOnly && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 px-3 py-2">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                  <span>
+                    Pratinjau cepat — file TIDAK diunduh, belum ada bundle untuk diproses.
+                    Untuk memproses data asli: <strong>Tarik → Bundle</strong> +{" "}
+                    <strong>Proses Bundle</strong> di instalasi lokal (sandbox/PC), atau unggah ZIP
+                    di serverless (maks ±4,5 MB).
+                  </span>
+                </p>
+              )}
               {/* Peringatan manifest — max-h + scroll supaya daftar panjang (33+ file)
                   tidak meledakkan kartu (audit 48-g-ui); daftar diringkas 5 nama. */}
               <div className="max-h-32 overflow-y-auto nice-scroll space-y-2 pr-1">
@@ -671,7 +728,7 @@ export function IngestTab() {
         <Button
           size="lg"
           onClick={onProcess}
-          disabled={process.isPending || (mode === "bundle" && !manifest)}
+          disabled={process.isPending || (mode === "bundle" && (!manifest || manifest.previewOnly))}
           className="gap-2"
         >
           {process.isPending ? (

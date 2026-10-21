@@ -268,14 +268,16 @@ export function useDriveSaveLink() {
 }
 
 /** Tarik file Excel dari link tersimpan → bundle (respons = manifest, sama
- *  dengan unggah ZIP — alur pratinjau/komit lanjutan identik). */
+ *  dengan unggah ZIP — alur pratinjau/komit lanjutan identik).
+ *  action "preview" = PRATINJAU CEPAT: listing Drive saja tanpa unduh —
+ *  bebas kuota disk/durasi serverless (manifest.previewOnly = true). */
 export function useDrivePull() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { ids?: string[]; url?: string }) =>
+    mutationFn: (vars: { ids?: string[]; url?: string; action?: "process" | "preview" }) =>
       fetchJson<BundleManifest>("/api/ingest/drive", {
         method: "POST",
-        body: JSON.stringify({ action: "process", ...vars }),
+        body: JSON.stringify({ action: vars.action ?? "process", ids: vars.ids, url: vars.url }),
       }),
     onSuccess: () => {
       // Segarkan "terakhir ditarik"/totalBytes/badge di daftar link (audit 48-g-ui).

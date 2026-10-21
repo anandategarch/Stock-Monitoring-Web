@@ -335,6 +335,10 @@ export interface BundleManifest {
   skippedFiles?: { path: string; reason: string }[];
   /** Pemotongan batas / subfolder gagal dibaca saat tarikan Drive — jujur. */
   driveNotices?: string[];
+  /** True = hasil "Pratinjau Cepat" (listing Drive saja): file TIDAK
+   *  diunduh, totalBytes tidak dihitung, bundleId kosong — TIDAK bisa
+   *  diproses; hanya untuk cek struktur/jumlah (bebas kuota serverless). */
+  previewOnly?: boolean;
 }
 
 /** Link folder Google Drive tersimpan — "biar ingat" (FR-1). */

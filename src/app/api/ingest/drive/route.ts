@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { createBundleWriter, BundleDiskFullError } from "@/lib/ingest-bundle";
+import { computeFolderStats } from "@/lib/bundles";
 import {
   canonicalDriveUrl, collectDriveFiles, dedupeDriveFiles, DriveAccessError, DriveFileBadError,
   downloadDriveFile, listDriveFolder, mapDriveFolderKey, parseDriveFolderId,
@@ -128,13 +129,18 @@ export async function GET() {
 }
 
 /**
- * POST — dua aksi:
- *  - action "save"   : { url } → cek folder Drive (listing langsung), deteksi
+ * POST — tiga aksi:
+ *  - action "save"    : { url } → cek folder Drive (listing langsung), deteksi
  *    folderKey kanonik dari JUDUL folder, simpan/segarkan baris link.
- *  - action "process" : { ids: string[] } atau { url } → tarik SEMUA file
- *    Excel dari folder terkait (unduh oleh server), materialisasi bundle
- *    lewat SATU jalur validasi createBundleWriter (FR-2), kembalikan
- *    manifest — alur lanjutannya identik dengan unggah ZIP.
+ *  - action "preview" : { ids } / { url } → PRATINJAU CEPAT — listing Drive
+ *    saja, file TIDAK diunduh, disk serverless TIDAK tersentuh → bebas kuota
+ *    /tmp & jauh di bawah 60 dtk untuk folder sebesar apa pun. Struktur (kunci
+ *    folder, jumlah, duplikat, subfolder gagal) dilaporkat jujur; total byte
+ *    tidak dihitung; manifest tidak bisa diproses (bundleId kosong).
+ *  - action "process" : { ids } atau { url } → tarik SEMUA file Excel dari
+ *    folder terkait (unduh oleh server), materialisasi bundle lewat SATU
+ *    jalur validasi createBundleWriter (FR-2), kembalikan manifest — alur
+ *    lanjutannya identik dengan unggah ZIP.
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -143,13 +149,24 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Body harus JSON valid." }, { status: 400 });
   }
-  const action = body.action === "process" ? "process" : body.action === "save" ? "save" : null;
-  if (!action) return NextResponse.json({ error: "action wajib 'save' atau 'process'." }, { status: 400 });
+  const action =
+    body.action === "process" ? "process"
+    : body.action === "preview" ? "preview"
+    : body.action === "save" ? "save"
+    : null;
+  if (!action) {
+    return NextResponse.json({ error: "action wajib 'save', 'preview', atau 'process'." }, { status: 400 });
+  }
 
   try {
     if (action === "save") return await handleSave(body);
+    if (action === "preview") return await handlePreview(body);
     return await handleProcess(body);
   } catch (err) {
+    // Error tahap perencanaan (validasi input / listing) → status sudah semantik.
+    if (err instanceof DrivePlanError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
     // Error AKSES folder → status semantik (audit 48-g-api: jangan endus teks).
     if (err instanceof DriveAccessError) {
       const status = err.code === "NOT_FOUND" ? 404 : 422;
@@ -263,7 +280,35 @@ async function handleSave(body: Record<string, unknown>): Promise<Response> {
 
 type Target = { folderId: string; rowId: string | null };
 
-async function handleProcess(body: Record<string, unknown>): Promise<Response> {
+/** Error tahap perencanaan (validasi input / listing Drive) — status HTTP sudah
+ *  semantik (422/404); dipakai bersama aksi "process" & "preview". */
+class DrivePlanError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "DrivePlanError";
+  }
+}
+
+type DrivePlan = {
+  targets: Target[];
+  pullName: string;
+  merged: { id: string; path: string; name: string; modifiedMs: number | null; tIdx: number }[];
+  skippedDuplicates: { path: string; reason: string }[];
+  suffixedDuplicates: string[];
+  driveFolders: NonNullable<BundleManifest["driveFolders"]>;
+  driveNotices: string[];
+  skippedNonExcelTotal: number;
+};
+
+type MergedFile = DrivePlan["merged"][number];
+
+/**
+ * Tahap PERSIPLAN tarikan Drive (dipakai bersama "process" dan "preview"):
+ * validasi ids/url, listing LIVE per-target (pool paralel kecil, urutan
+ * deterministik via tIdx), dedupe nama-sama, merge lintas-target dengan
+ * deteksi path ganda. TIDAK mengunduh file apa pun di tahap ini.
+ */
+async function planDrivePull(body: Record<string, unknown>): Promise<DrivePlan> {
   await ensureDriveLinkTable();
   const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
   const url = typeof body.url === "string" ? body.url : "";
@@ -272,31 +317,24 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
   const targets: Target[] = [];
   if (ids.length > 0) {
     if (ids.length > MAX_TARGETS) {
-      return NextResponse.json(
-        { error: `Maksimal ${MAX_TARGETS} link per tarikan — centang lebih sedikit folder.` },
-        { status: 422 },
+      throw new DrivePlanError(
+        422,
+        `Maksimal ${MAX_TARGETS} link per tarikan — centang lebih sedikit folder.`,
       );
     }
     const rows = await db.driveFolderLink.findMany({ where: { id: { in: ids } } });
     const missing = ids.filter((id) => !rows.some((r) => r.id === id));
     if (missing.length > 0) {
-      return NextResponse.json(
-        { error: `Link tersimpan tidak ditemukan (id: ${missing.join(", ")}).` },
-        { status: 404 },
-      );
+      throw new DrivePlanError(404, `Link tersimpan tidak ditemukan (id: ${missing.join(", ")}).`);
     }
     for (const r of rows) targets.push({ folderId: r.folderId, rowId: r.id });
   } else if (url) {
     targets.push({ folderId: parseDriveFolderId(url), rowId: null });
   } else {
-    return NextResponse.json(
-      { error: "Sertakan ids (link tersimpan) atau url (sekali tarik)." },
-      { status: 422 },
-    );
+    throw new DrivePlanError(422, "Sertakan ids (link tersimpan) atau url (sekali tarik).");
   }
 
   // --- Kumpulkan daftar file (listing LIVE saat ditarik, bukan cache) ---
-  type MergedFile = { id: string; path: string; name: string; modifiedMs: number | null; tIdx: number };
   const merged: MergedFile[] = [];
   const skippedDuplicates: { path: string; reason: string }[] = [];
   const suffixedDuplicates: string[] = [];
@@ -337,7 +375,7 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
     }
     if (collected.truncatedFolders) {
       driveNotices.push(
-        `Folder “${collected.folderName}” punya subfolder lebih dari 12 — hanya 12 pertama yang dipindai.`,
+        `Folder “${collected.folderName}” punya subfolder lebih dari ${MAX_SUBFOLDERS} — hanya ${MAX_SUBFOLDERS} pertama yang dipindai.`,
       );
     }
     for (const sub of collected.failedSubfolders) {
@@ -346,11 +384,9 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
 
     for (const f of dedup.kept) {
       if (seenPaths.has(f.path)) {
-        return NextResponse.json(
-          {
-            error: `Dua link ter-petakan ke path yang sama (“${f.path}”) — hapus salah satu link tersimpan yang menunjuk folder identik.`,
-          },
-          { status: 422 },
+        throw new DrivePlanError(
+          422,
+          `Dua link ter-petakan ke path yang sama (“${f.path}”) — hapus salah satu link tersimpan yang menunjuk folder identik.`,
         );
       }
       seenPaths.add(f.path);
@@ -366,12 +402,101 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
   }
 
   if (merged.length === 0) {
-    return NextResponse.json({ error: "Tidak ada file Excel yang bisa ditarik dari link itu." }, { status: 422 });
+    throw new DrivePlanError(422, "Tidak ada file Excel yang bisa ditarik dari link itu.");
   }
-  if (merged.length > MAX_FILES) {
-    return NextResponse.json(
-      { error: `Total ${merged.length} file melebihi batas ${MAX_FILES} per bundle — pisahkan per folder.` },
-      { status: 422 },
+
+  return {
+    targets,
+    pullName:
+      bundleName || (targets.length === 1 ? driveFolders[0]!.folderName : `Drive ${targets.length} folder`),
+    merged,
+    skippedDuplicates,
+    suffixedDuplicates,
+    driveFolders,
+    driveNotices,
+    skippedNonExcelTotal,
+  };
+}
+
+/**
+ * POST action "preview" — PRATINJAU CEPAT: listing Drive saja, file TIDAK
+ * diunduh dan disk serverless TIDAK tersentuh → bebas kuota /tmp dan jauh
+ * di bawah batas 60 dtk untuk folder sebesar apa pun (solusi untuk data
+ * yang tumbuh tiap minggu di Vercel serverless). Struktur (14 kunci folder,
+ * jumlah file, duplikat, subfolder gagal) dilaporkat jujur; total byte tidak
+ * diketahui dari listing → tidak dihitung; bundleId kosong → manifest ini
+ * TIDAK bisa diproses (validasi isi/magic bytes tetap milik tarikan penuh).
+ */
+async function handlePreview(body: Record<string, unknown>): Promise<Response> {
+  const plan = await planDrivePull(body);
+  const { folders, missingFolders } = computeFolderStats(
+    plan.merged.map((f) => ({ path: f.path, bytes: 0 })),
+  );
+  if (plan.merged.length > MAX_FILES) {
+    plan.driveNotices.push(
+      `Total ${plan.merged.length} file melebihi batas ${MAX_FILES} per bundle — pisahkan per folder saat menarik penuh.`,
+    );
+  }
+  plan.driveNotices.push(
+    "Pratinjau cepat: file tidak diunduh — jumlah & struktur dari listing Drive; total byte tidak dihitung.",
+  );
+
+  // Segarkan lastCheckedAt + jumlah file live (bukan "terakhir ditarik" —
+  // preview jujur tidak mengubah lastUsedAt/totalBytes).
+  const now = new Date();
+  await Promise.all(
+    plan.targets.map((t, i) =>
+      t.rowId
+        ? db.driveFolderLink.update({
+            where: { id: t.rowId },
+            data: {
+              lastCheckedAt: now,
+              fileCount: plan.driveFolders[i]?.fileCount ?? undefined,
+            },
+          })
+        : Promise.resolve(null),
+    ),
+  );
+
+  await db.auditLog.create({
+    data: {
+      action: "DRIVE_PREVIEW",
+      entity: "DriveFolderLink",
+      entityId: plan.targets[0]?.rowId ?? clampString(plan.targets.map((t) => t.folderId).join(","), 200),
+      detailJson: JSON.stringify({
+        folderNames: plan.driveFolders.map((f) => f.folderName),
+        fileCount: plan.merged.length,
+        notices: plan.driveNotices.length,
+      }),
+      actor: "analyst",
+    },
+  });
+
+  const manifest: BundleManifest = {
+    bundleId: "",
+    name: plan.pullName,
+    uploadedAt: new Date().toISOString(),
+    fileCount: plan.merged.length,
+    totalBytes: 0,
+    skippedEntries: plan.skippedNonExcelTotal,
+    folders,
+    missingFolders,
+    source: "drive",
+    previewOnly: true,
+    skippedDuplicates: plan.skippedDuplicates,
+    suffixedDuplicates: plan.suffixedDuplicates,
+    driveFolders: plan.driveFolders,
+    driveNotices: plan.driveNotices,
+  };
+  return NextResponse.json(manifest);
+}
+
+async function handleProcess(body: Record<string, unknown>): Promise<Response> {
+  const plan = await planDrivePull(body);
+  if (plan.merged.length > MAX_FILES) {
+    throw new DrivePlanError(
+      422,
+      `Total ${plan.merged.length} file melebihi batas ${MAX_FILES} per bundle — pisahkan per folder.`,
     );
   }
 
@@ -382,10 +507,8 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
   let totalBytes = 0;
   const skippedFiles: { path: string; reason: string }[] = [];
   /** Byte ter-unduh per target (indeks = urutan targets) — untuk totalBytes link. */
-  const perTargetBytes: number[] = targets.map(() => 0);
-
-  const pullName =
-    bundleName || (targets.length === 1 ? driveFolders[0]!.folderName : `Drive ${targets.length} folder`);
+  const perTargetBytes: number[] = plan.targets.map(() => 0);
+  const { pullName, driveFolders } = plan;
 
   try {
     let cursor = 0;
@@ -409,30 +532,30 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
       }
       await writer.write(file.path, buf);
     };
-    const workers = Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, merged.length) }, async () => {
-      while (cursor < merged.length) {
-        const file = merged[cursor]!;
+    const workers = Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, plan.merged.length) }, async () => {
+      while (cursor < plan.merged.length) {
+        const file = plan.merged[cursor]!;
         cursor += 1;
         await pullOne(file);
       }
     });
     await Promise.all(workers);
 
-    if (skippedFiles.length === merged.length) {
+    if (skippedFiles.length === plan.merged.length) {
       throw new Error(
-        `Semua ${merged.length} file di folder Drive gagal ditarik (rusak/bukan Excel) — tidak ada bundle yang dibuat.`,
+        `Semua ${plan.merged.length} file di folder Drive gagal ditarik (rusak/bukan Excel) — tidak ada bundle yang dibuat.`,
       );
     }
 
     const manifest = await writer.finish({
       name: pullName,
       source: "drive",
-      skippedEntriesExtra: skippedNonExcelTotal,
+      skippedEntriesExtra: plan.skippedNonExcelTotal,
       extras: {
-        ...(skippedDuplicates.length ? { skippedDuplicates } : {}),
-        ...(suffixedDuplicates.length ? { suffixedDuplicates } : {}),
+        ...(plan.skippedDuplicates.length ? { skippedDuplicates: plan.skippedDuplicates } : {}),
+        ...(plan.suffixedDuplicates.length ? { suffixedDuplicates: plan.suffixedDuplicates } : {}),
         ...(skippedFiles.length ? { skippedFiles } : {}),
-        ...(driveNotices.length ? { driveNotices } : {}),
+        ...(plan.driveNotices.length ? { driveNotices: plan.driveNotices } : {}),
         driveFolders,
       },
     });
@@ -442,7 +565,7 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
     // rename non-kanonik tidak tertinggal STALE (audit 48-g-data).
     const now = new Date();
     await Promise.all(
-      targets.map((t, i) =>
+      plan.targets.map((t, i) =>
         t.rowId
           ? db.driveFolderLink.update({
               where: { id: t.rowId },
@@ -468,10 +591,10 @@ async function handleProcess(body: Record<string, unknown>): Promise<Response> {
           folderNames: driveFolders.map((f) => f.folderName),
           fileCount: manifest.fileCount,
           totalBytes: manifest.totalBytes,
-          skippedDuplicates: skippedDuplicates.length,
-          suffixedDuplicates: suffixedDuplicates.length,
+          skippedDuplicates: plan.skippedDuplicates.length,
+          suffixedDuplicates: plan.suffixedDuplicates.length,
           skippedFiles: skippedFiles.length,
-          notices: driveNotices.length,
+          notices: plan.driveNotices.length,
         }),
         actor: "analyst",
       },
