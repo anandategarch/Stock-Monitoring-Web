@@ -11,7 +11,7 @@ import type {
   FollowUpCaseDto, FollowUpEventDto, IngestCommitResponse, IngestProcessResponse,
   LaporanResponse, NominalResponse, OutletPICDto, OverviewResponse, PivotResponse,
   PoResponse, RunDetail, RunSummary, SelisihInResponse, SettingsDto, SnapshotSummary,
-  DeviasiResponse, RestoRef, CaseEventRequest,
+  DeviasiResponse, RestoRef, CaseEventRequest, AgentJobDto, AgentStatusDto,
 } from "@/lib/types";
 
 export const qk = {
@@ -35,6 +35,8 @@ export const qk = {
   engineHealth: ["engine-health"] as const,
   audit: (limit: number) => ["audit", limit] as const,
   driveLinks: ["drive-links"] as const,
+  agentStatus: ["agent-status"] as const,
+  agentJob: (id: string) => ["agent-job", id] as const,
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -445,5 +447,70 @@ export function useDeleteSnapshot() {
       toast.success(`Snapshot periode ${out.periodKey} dihapus.`);
       invalidateAll();
     },
+  });
+}
+
+// ---------- Agent lokal "Python di Laptop" (Task 51) ----------
+
+/** Papan agent: online/offline + job aktif + riwayat. Poll lebih rapat saat
+ *  ada job aktif supaya kemajuan terasa live. */
+export function useAgentStatus(activeJobId: string | null) {
+  return useQuery({
+    queryKey: qk.agentStatus,
+    queryFn: () => fetchJson<AgentStatusDto>("/api/agent"),
+    refetchInterval: activeJobId ? 2_500 : 8_000,
+  });
+}
+
+/** Detail satu job agent — polling hanya selama job masih berjalan. */
+export function useAgentJob(id: string | null) {
+  return useQuery({
+    queryKey: qk.agentJob(id ?? "-"),
+    queryFn: () => fetchJson<{ job: AgentJobDto }>(`/api/agent/jobs/${id}`),
+    enabled: Boolean(id),
+    select: (d) => d.job,
+    refetchInterval: (query) => {
+      const st = query.state.data?.job?.status;
+      return st === "QUEUED" || st === "RUNNING" || st === "FINALIZING" ? 2_500 : false;
+    },
+  });
+}
+
+/** Buat job: agent laptop yang akan menarik file Drive + memproses via
+ *  engine FastAPI lokal, lalu mengunggah hasil — web tinggal menampilkan. */
+export function useAgentCreateJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      ids: string[]; periodKey: string; tanggalH: number; ambangAcrPct: number; bundleName?: string;
+    }) =>
+      fetchJson<{ job: AgentJobDto }>("/api/agent", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (out) => {
+      toast.success(
+        `Job dikirim ke papan agent — python di laptop akan menjemputnya (job ${out.job.id.slice(0, 8)}…).`,
+      );
+      void qc.invalidateQueries({ queryKey: qk.agentStatus });
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Gagal membuat job agent."),
+  });
+}
+
+/** Batalkan job: QUEUED langsung batal; RUNNING dihentikan agent pada laporan berikutnya. */
+export function useAgentCancelJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchJson<{ job: AgentJobDto }>(`/api/agent/jobs/${id}`, {
+        method: "POST",
+        body: JSON.stringify({ action: "cancel" }),
+      }),
+    onSuccess: () => {
+      toast.success("Job agent dibatalkan.");
+      void qc.invalidateQueries({ queryKey: qk.agentStatus });
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Gagal membatalkan job."),
   });
 }

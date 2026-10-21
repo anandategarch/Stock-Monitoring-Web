@@ -7,8 +7,8 @@
 
 import { useEffect, useRef, useState, type InputHTMLAttributes } from "react";
 import {
-  AlertTriangle, CheckCircle2, Cloud, CloudDownload, Database, Eye, FileWarning, FolderOpen, FolderTree,
-  Loader2, PackageOpen, Play, Rocket, Save, Trash2, UploadCloud, XCircle,
+  AlertTriangle, Ban, CheckCircle2, Clock, Cloud, CloudDownload, Database, Eye, FileWarning, FolderOpen, FolderTree,
+  Laptop, Loader2, PackageOpen, Play, Rocket, Save, Send, Trash2, UploadCloud, Wifi, WifiOff, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -26,11 +27,12 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
+  useAgentCancelJob, useAgentCreateJob, useAgentJob, useAgentStatus,
   useDriveDeleteLink, useDriveLinks, useDrivePull, useDriveSaveLink, useEngineHealth,
   useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns, useSettings,
 } from "@/hooks/use-sm-api";
 import { collectExcelFromFolder, MAX_FOLDER_BYTES, zipPickedFolder } from "@/lib/folder-pick";
-import type { BundleManifest } from "@/lib/types";
+import type { AgentJobDto, BundleManifest } from "@/lib/types";
 import { useSmStore } from "@/store/use-sm-store";
 import { EmptyState } from "@/components/smweb/empty-state";
 import { DqSeverityBadge, RunStatusBadge } from "@/components/smweb/badges";
@@ -67,6 +69,14 @@ export function IngestTab() {
   const [driveUrl, setDriveUrl] = useState("");
   const [driveInclude, setDriveInclude] = useState<Record<string, boolean>>({});
   const [drivePendingAction, setDrivePendingAction] = useState<"process" | "preview" | null>(null);
+  // Agent "Python di Laptop" (Task 51): job aktif dilacak id-nya supaya UI
+  // tetap menampilkan kemajuan walau halaman dimuat ulang (status punya activeJob).
+  const [agentJobId, setAgentJobId] = useState<string | null>(null);
+  const agentStatusQuery = useAgentStatus(agentJobId);
+  const agentCreate = useAgentCreateJob();
+  const agentCancel = useAgentCancelJob();
+  const agentJob = useAgentJob(agentJobId).data ?? null;
+  const agentOnline = agentStatusQuery.data?.online === true;
 
   const process = useIngestProcess();
   const commit = useIngestCommit();
@@ -85,7 +95,7 @@ export function IngestTab() {
   // catatan ini tidak muncul.
   const engineHealthQuery = useEngineHealth();
   const prodEngineDown = engineHealthQuery.data?.production?.reachable === false;
-  const { data: runsData, isPending: runsPending } = useRuns();
+  const { data: runsData, isPending: runsPending, refetch: refetchRuns } = useRuns();
   const runList = runsData?.runs ?? [];
   const {
     data: detail, isPending: detailPending, error: detailError, refetch: refetchDetail,
@@ -102,6 +112,26 @@ export function IngestTab() {
       setAmbang(String(settingsData.settings.ambangAcrDefault));
     }
   }, [settingsData]);
+
+  // Job aktif dari papan (mis. halaman dimuat ulang saat agent sedang bekerja)
+  // → lanjutkan pelacakan agar kemajuan tetap tampil.
+  useEffect(() => {
+    const active = agentStatusQuery.data?.activeJob;
+    if (active && !agentJobId) setAgentJobId(active.id);
+  }, [agentStatusQuery.data?.activeJob, agentJobId]);
+
+  // Selesai → otomatis buka pratinjau run-nya (hasil diproses di laptop, tampil di web).
+  const agentDoneRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!agentJob || agentJob.status !== "COMPLETED" || !agentJob.runBatchId) return;
+    if (agentDoneRef.current === agentJob.id) return;
+    agentDoneRef.current = agentJob.id;
+    setSelectedRunId(agentJob.runBatchId);
+    void refetchRuns();
+    toast.success(
+      `Job agent selesai — run pratinjau ${(agentJob.resultMeta?.summary.rowCount ?? 0).toLocaleString("id-ID")} baris siap ditinjau lalu dikomit.`,
+    );
+  }, [agentJob, refetchRuns]);
 
   const applyManifest = (out: BundleManifest, verb = "terunggah") => {
     setManifest(out);
@@ -223,6 +253,45 @@ export function IngestTab() {
   const onDrivePull = () => runDriveAction("process");
   const onDrivePreview = () => runDriveAction("preview");
 
+  // Kirim job ke papan agent: python di laptop menjemput, menarik file Drive
+  // dan memproses via engine FastAPI lokal — hasil diunggah & tampil di sini.
+  // Prasyarat sama dengan "Tarik" (link tersimpan dicentang) + parameter run di form bawah.
+  const onAgentJob = () => {
+    const h = Number(tanggalH);
+    const amb = Number(ambang);
+    if (!Number.isInteger(h) || h < 1 || h > 31) {
+      toast.error("TANGGAL H harus integer 1..31.");
+      return;
+    }
+    if (!Number.isInteger(amb) || amb < 1 || amb > 200) {
+      toast.error("AMBANG ACR harus integer 1..200 (INV-9).");
+      return;
+    }
+    if (includedDriveIds.length === 0) {
+      toast.error("Centang minimal satu link Drive di atas — itu yang akan diproses agent di laptop.");
+      return;
+    }
+    if (!agentOnline) {
+      toast.warning(
+        "Agent di laptop belum terlihat online — job tetap dibuat, tapi hanya akan diproses saat agent berjalan.",
+      );
+    }
+    agentCreate.mutate(
+      {
+        ids: includedDriveIds,
+        periodKey,
+        tanggalH: h,
+        ambangAcrPct: amb,
+        bundleName: bundleName || undefined,
+      },
+      { onSuccess: (out) => setAgentJobId(out.job.id) },
+    );
+  };
+
+  const onAgentCancel = () => {
+    if (agentJob) agentCancel.mutate(agentJob.id);
+  };
+
   const onProcess = () => {
     const h = Number(tanggalH);
     const amb = Number(ambang);
@@ -283,7 +352,8 @@ export function IngestTab() {
           Jalankan pipeline atas bundle export Accurate. Mode <strong>produksi</strong> memakai engine
           FastAPI yang membungkus pipeline asli v3.9.71 apa adanya (0-rewrite, FR-10) — pilih{" "}
           <strong>folder export langsung</strong> (ZIP otomatis di browser), tarik lewat{" "}
-          <strong>link Google Drive</strong>, atau unggah ZIP bundle; mode <strong>demo</strong> memakai data sintetis deterministik. Hasil run menjadi{" "}
+          <strong>link Google Drive</strong>, kirim ke <strong>Python di laptop</strong> (agent),
+          atau unggah ZIP bundle; mode <strong>demo</strong> memakai data sintetis deterministik. Hasil run menjadi{" "}
           <strong>pratinjau</strong> — snapshot periode hanya tersimpan setelah kamu menekan{" "}
           <strong>Komit</strong> (FR-4: tidak pernah menimpa snapshot lama diam-diam).
         </p>
@@ -431,11 +501,11 @@ export function IngestTab() {
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
                 <span>
                   Instansi ini berjalan <strong>serverless tanpa engine FastAPI</strong> — link bisa
-                  disimpan &amp; bundle bisa ditarik, tetapi <strong>Proses Bundle data asli</strong>
-                  hanya bisa dijalankan di instalasi lokal (sandbox/PC) tempat engine :3031 hidup.
-                  Batas tarikan serverless: ±60 detik dan kuota disk sementara — untuk folder
-                  besar, pakai <strong>Pratinjau Cepat</strong> di sini (tanpa unduh) atau tarik
-                  penuh di instalasi lokal.
+                  disimpan &amp; bundle bisa ditarik (maks ±60 dtk &amp; kuota disk sementara), tetapi{" "}
+                  <strong>Proses Bundle data asli di server ini</strong> tidak bisa dijalankan.
+                  Solusi tanpa batas serverless: <strong>Proses via Python di Laptop</strong> di
+                  seksi bawah — laptop memproses, hasil tampil &amp; dikomit di sini; atau jalankan
+                  penuh dari instalasi lokal (sandbox/PC) tempat engine :3031 hidup.
                 </span>
               </p>
             )}
@@ -578,6 +648,83 @@ export function IngestTab() {
                 Belum ada link tersimpan — tempel link folder Drive pertamamu di atas.
               </p>
             )}
+          </div>
+
+          {/* Proses via Python di Laptop (agent lokal) — Task 51.
+              Python di laptop menjemput job → menarik file Drive + engine FastAPI
+              LOKAL → hasil diunggah & tampil di web (pratinjau + komit). */}
+          <div className="border-t pt-3 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-64 flex-1">
+                <p className="text-sm font-medium flex items-center gap-2">
+                  <Laptop className="h-4 w-4" aria-hidden /> Proses via Python di Laptop (Agent)
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Python di laptop menjemput job ini, <strong>menarik file Drive &amp; memproses
+                  engine FastAPI secara lokal</strong> — bebas batas 60 dtk/kuota serverless — lalu
+                  hasilnya diunggah dan <strong>tampil di web ini</strong> (pratinjau + Komit di
+                  sini juga). Memakai link Drive yang dicentang di atas + parameter run di form
+                  bawah. Syarat: laptop menyala &amp; agent berjalan (panduan:{" "}
+                  <code className="text-[11px]">docs/AGENT-LOCAL.md</code>).
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0" aria-live="polite">
+                {agentStatusQuery.isPending ? (
+                  <Skeleton className="h-6 w-36" />
+                ) : agentOnline ? (
+                  <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">
+                    <Wifi className="h-3 w-3 mr-1" aria-hidden /> AGENT ONLINE
+                    {agentStatusQuery.data?.agentName ? ` · ${agentStatusQuery.data.agentName}` : ""}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300">
+                    <WifiOff className="h-3 w-3 mr-1" aria-hidden /> AGENT OFFLINE
+                  </Badge>
+                )}
+              </div>
+            </div>
+            {agentOnline && agentStatusQuery.data?.engine ? (
+              <p className="text-xs text-muted-foreground">
+                Engine di laptop: <strong>{String(agentStatusQuery.data.engine.engineName ?? "?")}</strong>{" "}
+                v{String(agentStatusQuery.data.engine.engineVersion ?? "?")} · definisi{" "}
+                {String(agentStatusQuery.data.engine.definitionVersion ?? "?")} · kontrak{" "}
+                {String(agentStatusQuery.data.engine.contractVersion ?? "?")} — dilaporkan agent
+                ({fmtDateTime(agentStatusQuery.data.lastSeenAt ?? "")}).
+              </p>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={onAgentJob}
+                disabled={
+                  agentCreate.isPending ||
+                  includedDriveIds.length === 0 ||
+                  (agentJob !== null && ["QUEUED", "RUNNING", "FINALIZING"].includes(agentJob.status))
+                }
+                className="gap-2"
+              >
+                {agentCreate.isPending ? (
+                  "Membuat job…"
+                ) : (
+                  <>
+                    <Send className="h-4 w-4" aria-hidden /> Kirim {includedDriveIds.length} Folder → Laptop (Proses Python)
+                  </>
+                )}
+              </Button>
+              <p className="text-xs text-muted-foreground flex-1 min-w-64">
+                {agentOnline
+                  ? "Agent online — job biasanya dijemput beberapa detik lagi."
+                  : "Agent offline — job dibuat dan menunggu sampai agent berjalan di laptop."}{" "}
+                Tanpa batas waktu serverless: proses berat terjadi di laptop.
+              </p>
+            </div>
+            {agentJob ? (
+              <AgentJobCard
+                job={agentJob}
+                onCancel={onAgentCancel}
+                cancelPending={agentCancel.isPending}
+              />
+            ) : null}
           </div>
 
           {manifest ? (
@@ -1026,6 +1173,119 @@ function SummaryChip({ label, value, tone }: { label: string; value: string; ton
     <div className="rounded-lg bg-muted/60 px-3 py-2">
       <p className="text-[11px] text-muted-foreground">{label}</p>
       <p className={`font-semibold cell-num ${toneClass}`}>{value}</p>
+    </div>
+  );
+}
+
+function AgentJobStatusBadge({ status }: { status: AgentJobDto["status"] }) {
+  const emerald =
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40";
+  if (status === "QUEUED") {
+    return (
+      <Badge variant="outline" className="gap-1 border-amber-400 text-amber-700 dark:text-amber-300">
+        <Clock className="h-3 w-3" aria-hidden /> MENUNGGU AGENT
+      </Badge>
+    );
+  }
+  if (status === "RUNNING") {
+    return (
+      <Badge className={`gap-1 ${emerald}`}>
+        <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> AGENT MEMPROSES
+      </Badge>
+    );
+  }
+  if (status === "FINALIZING") {
+    return (
+      <Badge className={`gap-1 ${emerald}`}>
+        <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> MERAKIT DI SERVER
+      </Badge>
+    );
+  }
+  if (status === "COMPLETED") {
+    return (
+      <Badge className={`gap-1 ${emerald}`}>
+        <CheckCircle2 className="h-3 w-3" aria-hidden /> SELESAI
+      </Badge>
+    );
+  }
+  if (status === "FAILED") {
+    return (
+      <Badge variant="outline" className="gap-1 border-rose-400 text-rose-700 dark:text-rose-300">
+        <XCircle className="h-3 w-3" aria-hidden /> GAGAL
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="gap-1">
+      <Ban className="h-3 w-3" aria-hidden /> DIBATALKAN
+    </Badge>
+  );
+}
+
+/** Kartu job agent live: kemajuan (progress + pesan), error jujur, ringkasan
+ *  hasil saat selesai — pratinjau run terbuka otomatis di panel bawah. */
+function AgentJobCard({
+  job, onCancel, cancelPending,
+}: {
+  job: AgentJobDto;
+  onCancel: () => void;
+  cancelPending: boolean;
+}) {
+  const active = job.status === "QUEUED" || job.status === "RUNNING" || job.status === "FINALIZING";
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <AgentJobStatusBadge status={job.status} />
+        <Badge variant="secondary">{job.periodKey} — {periodLabel(job.periodKey)}</Badge>
+        <Badge variant="outline">H {job.tanggalH} · ambang {job.ambangAcrPct}%</Badge>
+        {job.agentName ? (
+          <Badge variant="outline" className="max-w-40 truncate">{job.agentName}</Badge>
+        ) : null}
+        <span className="text-xs text-muted-foreground">dibuat {fmtDateTime(job.createdAt)}</span>
+        {active ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto h-8 gap-1 text-muted-foreground hover:text-rose-600"
+            onClick={onCancel}
+            disabled={cancelPending || job.status === "FINALIZING"}
+            aria-label="Batalkan job agent"
+          >
+            <Ban className="h-3.5 w-3.5" aria-hidden /> Batalkan
+          </Button>
+        ) : null}
+      </div>
+      {(job.status === "RUNNING" || job.status === "FINALIZING") && (
+        <div className="space-y-1">
+          <Progress value={job.progress} className="h-2" aria-label="Kemajuan job agent" />
+          <p className="text-xs text-muted-foreground">
+            {job.progress}% — {job.message ?? "bekerja…"}
+          </p>
+        </div>
+      )}
+      {job.status === "QUEUED" && job.message ? (
+        <p className="text-xs text-muted-foreground animate-pulse">{job.message}</p>
+      ) : null}
+      {job.status === "COMPLETED" ? (
+        <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-start gap-1.5">
+          <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+          <span>
+            {job.resultMeta?.summary
+              ? `${fmtInt(job.resultMeta.summary.rowCount)} baris · ${fmtInt(job.resultMeta.summary.warningCount)} warning · engine ${((job.resultMeta.durationMs ?? 0) / 1000).toFixed(1)}s`
+              : "Selesai"}{" "}
+            — pratinjau run terbuka di panel bawah; tekan <strong>Komit Snapshot</strong> untuk
+            menyimpannya permanen.
+          </span>
+        </p>
+      ) : null}
+      {job.status === "FAILED" && job.error ? (
+        <p className="text-xs text-rose-700 dark:text-rose-400 flex items-start gap-1.5">
+          <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden /> {job.error}
+        </p>
+      ) : null}
+      {job.status === "CANCELLED" ? (
+        <p className="text-xs text-muted-foreground">{job.error ?? "Job dibatalkan."}</p>
+      ) : null}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
 import { engineProcess, ENGINE_PROD_URL } from "@/lib/engine";
 import { resolveBundlePath } from "@/lib/bundles";
+import { readAgentResult, saveAgentResult } from "@/lib/agent-store";
 import { stableFingerprint } from "@/lib/fingerprint";
 import { prevPeriodKey } from "@/lib/format";
 import type {
@@ -55,19 +56,44 @@ async function audit(action: string, entity: string, entityId: string | null, de
 
 /** Langkah 1: jalankan engine, simpan RunBatch + DQ + manifest + log (BELUM komit).
  * Demo (tanpa bundleId) → engine demo :3030 · bundleId terisi → engine PRODUKSI :3031
- * (pipeline asli v3.9.71, FR-10). */
-export async function processRun(params: RunParams): Promise<{ runBatchId: string; result: EngineResult }> {
-  const engineUrl = params.bundleId ? ENGINE_PROD_URL : undefined;
-  const bundlePath = params.bundleId ? await resolveBundlePath(params.bundleId) : undefined;
-  const req: EngineProcessRequest = {
-    periodKey: params.periodKey,
-    tanggalH: params.tanggalH,
-    ambangAcrPct: params.ambangAcrPct,
-    bundleName: params.bundleName ?? undefined,
-    seed: params.seed ?? 0,
-    ...(bundlePath ? { bundlePath } : {}),
-  };
-  const result = await engineProcess(req, engineUrl);
+ * (pipeline asli v3.9.71, FR-10).
+ * Opsi `providedResult` (Task 51 — agent lokal): hasil EngineResult diproses di
+ * PYTHON LAPTOP user (tarik Drive + engine FastAPI lokal) lalu diunggah agent —
+ * server TIDAK memanggil engine; hasil utuh disimpan di AgentResult (gzip+b64)
+ * supaya KOMIT serverless tetap mungkin tanpa engine. FR-12 tetap jujur: engine
+ * deterministik, jadi hasil tersimpan = output kanonik run itu. */
+export async function processRun(
+  params: RunParams,
+  opts: { providedResult?: EngineResult; agentName?: string | null } = {},
+): Promise<{ runBatchId: string; result: EngineResult }> {
+  let result: EngineResult;
+  let paramsForLog: Record<string, unknown>;
+  if (opts.providedResult) {
+    result = opts.providedResult;
+    paramsForLog = {
+      periodKey: params.periodKey,
+      tanggalH: params.tanggalH,
+      ambangAcrPct: params.ambangAcrPct,
+      bundleName: params.bundleName ?? null,
+      seed: params.seed ?? 0,
+      bundleId: null,
+      engineSource: "agent",
+      agentName: opts.agentName ?? null,
+    };
+  } else {
+    const engineUrl = params.bundleId ? ENGINE_PROD_URL : undefined;
+    const bundlePath = params.bundleId ? await resolveBundlePath(params.bundleId) : undefined;
+    const req: EngineProcessRequest = {
+      periodKey: params.periodKey,
+      tanggalH: params.tanggalH,
+      ambangAcrPct: params.ambangAcrPct,
+      bundleName: params.bundleName ?? undefined,
+      seed: params.seed ?? 0,
+      ...(bundlePath ? { bundlePath } : {}),
+    };
+    result = await engineProcess(req, engineUrl);
+    paramsForLog = { ...req, bundleId: params.bundleId ?? null };
+  }
 
   const runBatch = await db.runBatch.create({
     data: {
@@ -75,7 +101,7 @@ export async function processRun(params: RunParams): Promise<{ runBatchId: strin
       bundleName: params.bundleName,
       status: result.status,
       definitionVersion: result.definitionVersion,
-      paramsJson: JSON.stringify({ ...req, bundleId: params.bundleId ?? null }),
+      paramsJson: JSON.stringify(paramsForLog),
       summaryJson: JSON.stringify(result.summary),
       sourceInfoJson: JSON.stringify(result.sourceFiles),
       logJson: JSON.stringify(result.logs),
@@ -87,6 +113,11 @@ export async function processRun(params: RunParams): Promise<{ runBatchId: strin
       finishedAt: new Date(),
     },
   });
+
+  // Hasil utuh run agent (dipakai KOMIT — serverless tanpa engine, Task 51).
+  if (opts.providedResult) {
+    await saveAgentResult(runBatch.id, result);
+  }
 
   if (result.dqIssues.length > 0) {
     await db.dQIssue.createMany({
@@ -122,6 +153,7 @@ export async function processRun(params: RunParams): Promise<{ runBatchId: strin
     status: result.status,
     rowCount: result.summary.rowCount,
     warningCount: result.summary.warningCount,
+    ...(opts.providedResult ? { engineSource: "agent", agentName: opts.agentName ?? null } : {}),
   });
 
   return { runBatchId: runBatch.id, result };
@@ -157,9 +189,15 @@ function mapRows(result: EngineResult, snapshotId: string) {
 }
 
 /**
- * Langkah 2: KOMIT — panggil ulang engine (FR-12 idempotent → identik), tulis snapshot
- * permanen. Periode lama ACTIVE → SUPERSEDED. Kegagalan di tengah → snapshot dibersihkan,
- * data lama tak tersentuh (NFR-3).
+ * Langkah 2: KOMIT — dapatkan hasil run, tulis snapshot permanen. Periode lama
+ * ACTIVE → SUPERSEDED. Kegagalan di tengah → snapshot dibersihkan, data lama
+ * tak tersentuh (NFR-3).
+ * Dua sumber hasil (Task 51):
+ *  - run biasa        → panggil ulang engine (FR-12 idempotent → identik).
+ *  - run agent laptop  → hasil EngineResult tersimpan (gzip+b64 di AgentResult)
+ *                        DIPAKAI APA ADANYA — serverless Vercel tidak punya
+ *                        engine; engine deterministik → hasil tersimpan =
+ *                        output kanonik run itu (FR-12 tetap jujur).
  */
 export async function commitRun(runBatchId: string): Promise<{
   snapshotId: string;
@@ -180,20 +218,36 @@ export async function commitRun(runBatchId: string): Promise<{
   });
   // FR-12 idempotent: bundleId (bukan path) yang tersimpan — resolve ulang
   // supaya komit tetap sahih walau direktori bundle dipindah/di-rename.
-  const parsed = parseJsonSafe<{ bundleId?: string | null }>(run.paramsJson, {});
+  const parsed = parseJsonSafe<{
+    bundleId?: string | null;
+    engineSource?: string;
+    agentName?: string | null;
+  }>(run.paramsJson, {});
   const bundleId = typeof parsed.bundleId === "string" ? parsed.bundleId : null;
+  const isAgentRun = parsed.engineSource === "agent";
 
-  const result = await engineProcess(
-    {
-      periodKey: params.periodKey,
-      tanggalH: params.tanggalH,
-      ambangAcrPct: params.ambangAcrPct,
-      bundleName: params.bundleName ?? undefined,
-      seed: params.seed ?? 0,
-      ...(bundleId ? { bundlePath: await resolveBundlePath(bundleId) } : {}),
-    },
-    bundleId ? ENGINE_PROD_URL : undefined,
-  );
+  let result: EngineResult;
+  if (isAgentRun) {
+    const stored = await readAgentResult(run.id);
+    if (!stored) {
+      throw new Error(
+        "Hasil run agent tidak tersimpan di server — jalankan ulang job agent (atau proses ulang run ini dari instalasi lokal).",
+      );
+    }
+    result = stored;
+  } else {
+    result = await engineProcess(
+      {
+        periodKey: params.periodKey,
+        tanggalH: params.tanggalH,
+        ambangAcrPct: params.ambangAcrPct,
+        bundleName: params.bundleName ?? undefined,
+        seed: params.seed ?? 0,
+        ...(bundleId ? { bundlePath: await resolveBundlePath(bundleId) } : {}),
+      },
+      bundleId ? ENGINE_PROD_URL : undefined,
+    );
+  }
 
   const summary = result.summary;
 

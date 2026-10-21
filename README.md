@@ -25,7 +25,7 @@ single-user (D-6) · repo baru terpisah (D-8).
 
 | Mode | Ingest bundle real (ZIP export Accurate) | Run/seed DEMO | Semua tab analisis (Pivot, Deviasi, Selisih IN, Nominal, Laporan, PO, DQ, Follow-Up) |
 |---|---|---|---|
-| **Vercel + Supabase** | belum* (lihat §5.2) | ✅ via fallback **embedded** | ✅ penuh (baca snapshot di Supabase) |
+| **Vercel + Supabase** | ✅ via **Agent Lokal** (Python di laptop memproses — §1a) · jalur server penuh: lihat catatan* | ✅ via fallback **embedded** | ✅ penuh (baca snapshot di Supabase) |
 | **Self-host (VPS/Railway: Next.js + engine co-located)** | ✅ penuh | ✅ | ✅ |
 | **Dev lokal (SQLite)** | ✅ (jalankan engine produksi lokal) | ✅ | ✅ |
 
@@ -65,6 +65,19 @@ rusak/bukan Excel → dilewati + dilaporkan (konsisten kelas DQ SKIP_FILE); fold
 dibagikan "Siapa saja yang memiliki link · Viewer". Batas: 400 MB total, 60 MB/file,
 200 file, 12 subfolder per folder. Di Vercel berlaku `maxDuration` 60 dtk — folder sangat
 besar lebih baik ditarik dari self-host/lokal.
+
+### 1a. Agent Lokal — "Python di Laptop" memproses, web menampilkan
+
+Untuk data real (ratusan MB, tumbuh tiap minggu) di atas serverless Vercel, jalur yang
+tanpa batas waktu/kuota adalah **hybrid**: kamu klik **Kirim N Folder → Laptop
+(Proses Python)** di tab Proses & Ingest → agent Python di laptop (murni stdlib,
+`agent/smweb_laptop_agent.py`) menjemput job lewat polling → **menarik file Drive +
+menjalankan engine FastAPI :3031 secara lokal** → hasil EngineResult diunggah
+ter-gzip ter-chunk → web menampilkannya sebagai run pratinjau → **Komit di web memakai
+hasil tersimpan** (tabel `AgentResult`; serverless tidak butuh engine). Live progress,
+batalkan kapan pun, file rusak dilewati jujur, heartbeat (agent mati ≥15 menit → job
+GAGAL jujur). Panduan lengkap laptop: **docs/AGENT-LOCAL.md**. Wajib: env `AGENT_TOKEN`
+di Vercel = `SMWEB_AGENT_TOKEN` di laptop (tanpa itu endpoint agent menolak 503).
 
 ---
 
@@ -191,8 +204,10 @@ Selesai — cek di Supabase Dashboard → **Table Editor**: tabel `RunBatch`, `P
 |---|---|---|---|
 | `DATABASE_URL` | ✅ | — | SQLite `file:` (dev) **atau** PostgreSQL Supabase (prod). |
 | `DIRECT_URL` | ✅ (prod PG) | — | Koneksi direct untuk DDL Prisma (skema kanonik `postgresql`). |
+| `AGENT_TOKEN` | ✅ (agent di Vercel) | dev: `smweb-dev-agent-token` | Shared-secret header `X-Agent-Token` endpoint agent — tanpa ini endpoint agent menolak (503). |
 | `SM_ENGINE_URL` | — | `http://127.0.0.1:3030` | Engine DEMO service. |
 | `SM_ENGINE_PROD_URL` | — | `http://127.0.0.1:3031` | Engine PRODUKSI FastAPI (ingest bundle real). |
+| `SM_ENGINE_TOKEN` | — | — | Shared-secret engine produksi (header `x-engine-token`). |
 | `SM_ENGINE_EMBED_FALLBACK` | — | `on` | `off` = matikan fallback embedded demo. |
 
 ---

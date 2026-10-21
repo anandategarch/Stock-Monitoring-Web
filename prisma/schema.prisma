@@ -333,6 +333,62 @@ model DriveFolderLink {
   @@index([folderKey])
 }
 
+// ---- Papan job "Python di Laptop" (Agent lokal, hybrid). Web membuat job;
+// agent Python di laptop MEN-JEMPUT job lewat polling (Vercel tidak bisa
+// menjangkau laptop di balik NAT — arsitektur tarik/pull), memproses file
+// secara LOKAL (tarik Drive + engine FastAPI :3031), lalu mengunggah hasil
+// EngineResult secara ter-chunk (gzip+base64, batas body 4,5 MB serverless).
+model AgentJob {
+  id            String    @id @default(cuid())
+  kind          String    @default("PROCESS_DRIVE")
+  status        String    // QUEUED → RUNNING → (FINALIZING) → COMPLETED | FAILED | CANCELLED
+  periodKey     String
+  tanggalH      Int
+  ambangAcrPct  Int
+  bundleName    String?
+  // Target folder Drive yang dipilih UI: [{rowId, folderId, url, folderName, folderKey}]
+  paramsJson    String
+  progress      Int       @default(0)
+  message       String?
+  agentName     String?
+  error         String?
+  resultMetaJson String?  // ringkasan kecil utk UI (summary, durationMs, engineKind)
+  runBatchId    String?   // run pratinjau yang dibuat server dari hasil agent
+  createdAt     DateTime  @default(now())
+  claimedAt     DateTime?
+  heartbeatAt   DateTime?
+  finishedAt    DateTime?
+
+  chunks AgentJobChunk[]
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+// Potongan hasil gzip dari agent (urut seq 0..n-1; dirakit ulang saat complete).
+model AgentJobChunk {
+  id    String  @id @default(cuid())
+  jobId String
+  seq   Int
+  data  String  // base64 potongan byte gzip
+
+  job AgentJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, seq])
+}
+
+// Hasil EngineResult utuh (gzip+base64) milik run buatan agent — dipakai
+// KOMIT tanpa memanggil ulang engine (FR-12: engine deterministik, hasil
+// tersimpan = output kanonik run itu; serverless tidak punya engine).
+// Tabel BARU (bukan kolom RunBatch) supaya kueri RunBatch lama di produksi
+// tidak pernah menabrak kolom yang belum ada (pelajaran auto-bootstrap Drive).
+model AgentResult {
+  id         String   @id @default(cuid())
+  runBatchId String   @unique
+  data       String   // base64(gzip(JSON EngineResult))
+  createdAt  DateTime @default(now())
+}
+
 // ---- DISEDIKAN Fase 5 (FR-50..52) — rekonsiliasi transfer 42.15 kedua sisi. Belum dipakai.
 model TransferLedger4215 {
   id            String   @id @default(cuid())

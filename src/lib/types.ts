@@ -355,6 +355,55 @@ export interface DriveFolderLinkDto {
   createdAt: string;
 }
 
+// ---------- Agent lokal "Python di Laptop" (Task 51) ----------
+
+export type AgentJobStatus =
+  | "QUEUED" | "RUNNING" | "FINALIZING" | "COMPLETED" | "FAILED" | "CANCELLED";
+
+/** Target folder Drive yang dijemput agent dari daftar link tersimpan. */
+export interface AgentJobTarget {
+  rowId: string | null;
+  folderId: string;
+  url: string;
+  folderName: string;
+  folderKey: string | null;
+}
+
+export interface AgentJobDto {
+  id: string;
+  kind: string;
+  status: AgentJobStatus;
+  periodKey: string;
+  tanggalH: number;
+  ambangAcrPct: number;
+  bundleName: string | null;
+  targets: AgentJobTarget[];
+  progress: number;
+  message: string | null;
+  agentName: string | null;
+  error: string | null;
+  runBatchId: string | null;
+  resultMeta: {
+    summary: EngineSummary;
+    engineKind: string | null;
+    durationMs: number | null;
+  } | null;
+  createdAt: string;
+  claimedAt: string | null;
+  heartbeatAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface AgentStatusDto {
+  online: boolean;
+  agentName: string | null;
+  lastSeenAt: string | null;
+  engine: Record<string, unknown> | null;
+  tokenConfigured: boolean;
+  activeJob: AgentJobDto | null;
+  recentJobs: AgentJobDto[];
+}
+
 export interface IngestCommitResponse {
   snapshotId: string;
   periodKey: string;
