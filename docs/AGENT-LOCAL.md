@@ -1,4 +1,4 @@
-# Agent Lokal — "Python di Laptop" (Task 51)
+# Agent Lokal — "Python di Laptop" (Task 51 + launcher sekali-klik Task 52)
 
 > **Idenya:** kamu klik **"Kirim N Folder → Laptop (Proses Python)"** di web →
 > Python di laptopmu menjemput job → **menarik file Google Drive + menjalankan
@@ -7,6 +7,52 @@
 > Seluruh pekerjaan berat (unduh 100–300 MB, pipeline 79 ribu baris) terjadi di
 > laptop — situs (serverless Vercel) hanya menerima hasilnya, jadi **bebas dari
 > batas 60 detik / kuota /tmp / body 4,5 MB**.
+
+## Cara paling gampang — SEKALI KLIK (rekomendasi)
+
+Setelah repo ada di laptop (clone sekali: `git clone
+https://github.com/anandategarch/Stock-Monitoring-Web.git`), **dobel-klik SATU
+file** — launcher mengurus sisanya:
+
+| Sistem operasi | Cara |
+|---|---|
+| **Windows** | dobel-klik **`mulai-laptop.bat`** |
+| **macOS** | dobel-klik **`mulai-laptop.command`** |
+| **Linux** | `./mulai-laptop.sh` |
+
+Saat **pertama kali** dijalankan:
+1. Bila token agent belum terisi, muncul dialog kecil (mode terminal: prompt
+   sederhana) — **tempel token agent sekali saja** (nilainya sama dengan env
+   `AGENT_TOKEN` di server). Token tersimpan di `laptop_config.json` yang
+   **otomatis di-gitignore — tidak pernah masuk GitHub**.
+2. Launcher otomatis: `git pull` → menyiapkan dependensi engine (memakai Python
+   sistem bila kamu sudah pernah `pip install`; atau membuat venv
+   `.venv-laptop` dan menginstal sendiri ±1–3 menit sekali jalan) → menyalakan
+   engine FastAPI di `:3031` (bila sudah jalan, **dipakai ulang**) → menjalankan
+   agent.
+3. Dashboard kecil menampilkan **WEB ✓ · ENGINE ✓ · AGENT ✓**, job yang sedang
+   diproses, dan log langsung dari engine + agent. Ada tombol **MULAI/BERHENTI**,
+   **Buka Web**, **Perbarui GitHub**, dan **Ubah Token**.
+4. **Tinggalkan jendela terbuka** selama ingin tetap tersambung — tutup
+   jendela (atau Ctrl+C) = putus dengan rapi. Agent punya `autostart` — begitu
+   file dibuka semuanya menyala sendiri.
+
+Saat berikutnya: dobel-klik file yang sama — langsung jalan (kode ikut
+ter-update otomatis lewat git pull).
+
+Tanpa monitor/GUI (mis. SSH/server tanpa layar) launcher otomatis beralih ke
+**mode terminal**; paksa dengan `--console`. Opsi lain: `--once` (proses satu
+job lalu berhenti), `--status` (cetak status lalu keluar), `--no-update`,
+`--server URL`, `--port N`, `--name NAMA` — `python mulai_laptop.py --help`.
+
+Yang launcher TIDAK lakukan: mengubah engine yang sudah berjalan di `:3031`
+milik proses lain (dipakai ulang apa adanya) dan membocorkan token (file
+config lokal selalu di-gitignore).
+
+## Cara manual (tanpa launcher) — setara
+
+Syarat: Python 3.8+ (agent **murni stdlib — tanpa pip install**) dan engine
+FastAPI dengan dependensinya (sudah ada di repo ini).
 
 ## Arsitektur (kenapa "tarik", bukan "dorong")
 

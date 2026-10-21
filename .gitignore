@@ -90,3 +90,24 @@ db/*.db
 
 # Folder kerja sementara agent lokal (Task 51)
 /agent/smweb-agent-work/
+
+# Launcher sekali-klik (Task 52) — token TIDAK ikut ke GitHub
+/laptop_config.json
+/.venv-laptop/
+
+# Launcher sekali-klik (Task 52) — token TIDAK ikut ke GitHub
+/laptop_config.json
+/.venv-laptop/
+
+# Launcher sekali-klik (Task 52) — token TIDAK ikut ke GitHub
+/laptop_config.json
+/.venv-laptop/
+
+# Launcher sekali-klik (Task 52) — token TIDAK ikut ke GitHub
+/laptop_config.json
+/.venv-laptop/
+
+# Launcher sekali-klik (Task 52) — token TIDAK ikut ke GitHub
+/laptop_config.json
+/.venv-laptop/
+__pycache__/

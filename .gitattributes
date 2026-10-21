@@ -1,0 +1,5 @@
+# File batch Windows wajib CRLF supaya cmd.exe aman di semua Windows
+*.bat text eol=crlf
+# Skrip shell unix wajib LF
+*.sh text eol=lf
+*.command text eol=lf

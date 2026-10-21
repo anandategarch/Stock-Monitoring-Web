@@ -1,0 +1,12 @@
+{
+  "_catatan": "Salin file ini menjadi laptop_config.json saat ingin mengatur manual. Biasanya TIDAK PERLU — launcher bertanya token sekali dan menyimpannya sendiri. laptop_config.json TIDAK di-commit ke GitHub (sudah di .gitignore).",
+  "server": "https://stock-monitoring-web.vercel.app",
+  "agent_token": "TEMPEL-TOKEN-AGENT-DI-SINI",
+  "agent_name": "",
+  "engine_host": "127.0.0.1",
+  "engine_port": 3031,
+  "use_venv": true,
+  "auto_update": true,
+  "autostart": true,
+  "open_dashboard": false
+}

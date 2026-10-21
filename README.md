@@ -76,8 +76,16 @@ menjalankan engine FastAPI :3031 secara lokal** → hasil EngineResult diunggah
 ter-gzip ter-chunk → web menampilkannya sebagai run pratinjau → **Komit di web memakai
 hasil tersimpan** (tabel `AgentResult`; serverless tidak butuh engine). Live progress,
 batalkan kapan pun, file rusak dilewati jujur, heartbeat (agent mati ≥15 menit → job
-GAGAL jujur). Panduan lengkap laptop: **docs/AGENT-LOCAL.md**. Wajib: env `AGENT_TOKEN`
-di Vercel = `SMWEB_AGENT_TOKEN` di laptop (tanpa itu endpoint agent menolak 503).
+GAGAL jujur). Wajib: env `AGENT_TOKEN` di Vercel = token agent di laptop (tanpa itu
+endpoint agent menolak 503).
+
+**Cara menjalankan di laptop — SEKALI KLIK** (Task 52): setelah clone repo, cukup
+dobel-klik **`mulai-laptop.bat`** (Windows) / **`mulai-laptop.command`** (macOS) /
+`mulai-laptop.sh` (Linux). Launcher `mulai_laptop.py` otomatis: git pull → dependensi
+engine (venv otomatis bila perlu) → engine FastAPI :3031 (dipakai ulang bila sudah
+jalan) → agent tersambung ke web, dengan dashboard WEB ✓ / ENGINE ✓ / AGENT ✓.
+Token agent ditanyakan sekali, disimpan di `laptop_config.json` (di-gitignore).
+Panduan lengkap laptop: **docs/AGENT-LOCAL.md**.
 
 ---
 
