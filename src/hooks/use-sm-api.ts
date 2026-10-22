@@ -450,6 +450,24 @@ export function useDeleteSnapshot() {
   });
 }
 
+/** Task 54: hapus run dari Riwayat (run demo/uji menumpuk). Server menolak
+ *  run yang masih punya snapshot / sedang dirakit job agent — pesan jujur. */
+export function useDeleteRun() {
+  const invalidateAll = useInvalidateAll();
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchJson<{ ok: boolean; id: string; periodKey: string }>(`/api/runs/${id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: (out) => {
+      toast.success(`Run periode ${out.periodKey} dihapus dari riwayat.`);
+      invalidateAll();
+    },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "Gagal menghapus run."),
+  });
+}
+
 // ---------- Agent lokal "Python di Laptop" (Task 51) ----------
 
 /** Papan agent: online/offline + job aktif + riwayat. Poll lebih rapat saat

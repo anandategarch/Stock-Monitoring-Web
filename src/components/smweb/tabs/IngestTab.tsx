@@ -21,14 +21,14 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
   useAgentCancelJob, useAgentCreateJob, useAgentJob, useAgentStatus,
-  useDriveDeleteLink, useDriveLinks, useDrivePull, useDriveSaveLink, useEngineHealth,
+  useDeleteRun, useDriveDeleteLink, useDriveLinks, useDrivePull, useDriveSaveLink, useEngineHealth,
   useIngestCommit, useIngestProcess, useIngestUpload, useRunDetail, useRuns, useSettings,
 } from "@/hooks/use-sm-api";
 import { collectExcelFromFolder, MAX_FOLDER_BYTES, zipPickedFolder } from "@/lib/folder-pick";
@@ -81,6 +81,7 @@ export function IngestTab() {
   const process = useIngestProcess();
   const commit = useIngestCommit();
   const upload = useIngestUpload();
+  const runDelete = useDeleteRun();
   const driveLinksQuery = useDriveLinks();
   const driveSave = useDriveSaveLink();
   const drivePull = useDrivePull();
@@ -112,6 +113,26 @@ export function IngestTab() {
       setAmbang(String(settingsData.settings.ambangAcrDefault));
     }
   }, [settingsData]);
+
+  // Task 54: mode engine terakhir diingat (localStorage) — mode "demo" jangan
+  // menyala diam-diam lagi setelah user memakai Produksi (run demo nyasar di
+  // produksi karena default selalu demo). Gagal baca/tulis → abaikan diam-diam.
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("smweb-ingest-mode");
+      if (saved === "bundle" || saved === "demo") setMode(saved);
+    } catch {
+      /* localStorage tak tersedia — pakai default */
+    }
+  }, []);
+  const setModePersisted = (next: EngineMode) => {
+    setMode(next);
+    try {
+      window.localStorage.setItem("smweb-ingest-mode", next);
+    } catch {
+      /* abaikan */
+    }
+  };
 
   // Job aktif dari papan (mis. halaman dimuat ulang saat agent sedang bekerja)
   // → lanjutkan pelacakan agar kemajuan tetap tampil.
@@ -292,6 +313,17 @@ export function IngestTab() {
     if (agentJob) agentCancel.mutate(agentJob.id);
   };
 
+  // Task 54: hapus run dari riwayat (demo/uji menumpuk). Run terpilih yang
+  // terhapus → tutup pratinjanjanya; run berkomit ditolak server dengan pesan
+  // jujur (hapus snapshot-nya dulu di tab Konfigurasi).
+  const onRunDelete = (runId: string) => {
+    runDelete.mutate(runId, {
+      onSuccess: () => {
+        if (selectedRunId === runId) setSelectedRunId(null);
+      },
+    });
+  };
+
   const onProcess = () => {
     const h = Number(tanggalH);
     const amb = Number(ambang);
@@ -362,7 +394,7 @@ export function IngestTab() {
       {/* Pilihan mode engine */}
       <RadioGroup
         value={mode}
-        onValueChange={(v) => setMode(v === "bundle" ? "bundle" : "demo")}
+        onValueChange={(v) => setModePersisted(v === "bundle" ? "bundle" : "demo")}
         className="grid gap-3 sm:grid-cols-2"
         aria-label="Mode engine"
       >
@@ -674,6 +706,17 @@ export function IngestTab() {
                   macOS) — engine + agent nyala otomatis sekali klik, token ditanya sekali
                   (panduan: <code className="text-[11px]">docs/AGENT-LOCAL.md</code>).
                 </p>
+                {/* Task 54: alur 5 langkah — user bertanya "sudah ambil file, terus
+                    aku tekan apa?" — jawabannya selalu terlihat di sini. */}
+                <p className="text-xs text-muted-foreground mt-2 rounded-lg bg-muted/50 px-3 py-2">
+                  <strong>Alur lengkap:</strong> ① centang folder di atas → ② tekan{" "}
+                  <em>Kirim … → Laptop</em> → ③ tunggu kartu job <strong>SELESAI</strong>{" "}
+                  (agent menyalin file dari disk C/Drive + engine laptop memproses, otomatis) →
+                  ④ pratinjau run terbuka sendiri di panel bawah → tinjau lalu tekan{" "}
+                  <strong>Komit Snapshot</strong> → ⑤ data periode siap di semua tab analisis
+                  (Deviasi, Selisih IN, PO Menunggu, Pivot, Nominal, Follow-Up, Laporan).
+                  Tidak ada tombol lain yang wajib ditekan.
+                </p>
               </div>
               <div className="flex items-center gap-2 shrink-0" aria-live="polite">
                 {agentStatusQuery.isPending ? (
@@ -961,16 +1004,59 @@ export function IngestTab() {
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs">{fmtDateTime(r.startedAt)}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedRunId(r.id);
-                        }}
-                      >
-                        Pratinjau
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedRunId(r.id);
+                          }}
+                        >
+                          Pratinjau
+                        </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-muted-foreground hover:text-rose-600 dark:hover:text-rose-400"
+                              aria-label={`Hapus run periode ${r.periodKey} dari riwayat`}
+                              title={
+                                r.committedAt
+                                  ? "Run berkomit — hapus snapshot-nya dulu di tab Konfigurasi"
+                                  : "Hapus run ini dari riwayat"
+                              }
+                              disabled={runDelete.isPending}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Trash2 className="h-4 w-4" aria-hidden />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>
+                                Hapus run {r.periodKey}{r.bundleName ? ` “${r.bundleName}”` : ""} dari riwayat?
+                              </AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Pratinjau, manifest file, isu DQ, log, dan hasil agent run ini ikut
+                                terhapus. Snapshot yang sudah dikomit TIDAK tersentuh — run
+                                berkomit akan ditolak sampai snapshot-nya dihapus di tab
+                                Konfigurasi. Tindakan ini tidak bisa dibatalkan.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Batal</AlertDialogCancel>
+                              <AlertDialogAction
+                                className="bg-rose-600 hover:bg-rose-700 text-white"
+                                onClick={() => onRunDelete(r.id)}
+                              >
+                                Hapus Run
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

@@ -355,6 +355,14 @@ function PeriodSection({ snapshotId }: { snapshotId: string | null }) {
                     <TableCell>
                       {s.state === "ACTIVE" ? (
                         <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/40">ACTIVE</Badge>
+                      ) : s.state === "BUILDING" ? (
+                        <Badge
+                          variant="outline"
+                          className="border-amber-400 text-amber-700 dark:text-amber-300"
+                          title="Komit mati di tengah (mis. habis 60 dtk serverless) — snapshot setengah jadi, belum pernah terlihat di analisis. Setelah ±15 menit bisa dihapus; data lama tidak tersentuh (NFR-3)."
+                        >
+                          BUILDING (komit terputus)
+                        </Badge>
                       ) : (
                         <Badge variant="secondary">SUPERSEDED</Badge>
                       )}

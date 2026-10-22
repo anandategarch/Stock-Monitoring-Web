@@ -286,8 +286,12 @@ export async function commitRun(runBatchId: string): Promise<{
 
   try {
     const rows = mapRows(result, snapshot.id);
-    for (let i = 0; i < rows.length; i += 500) {
-      await db.snapshotRow.createMany({ data: rows.slice(i, i + 500) });
+    // Task 54: chunk 2000 (bukan 500) — komit 88rb baris dulu butuh 177 kali
+    // bolak-balik Supabase ≈ >60 dtk → fungsi Vercel dibunuh di tengah dan
+    // snapshot BUILDING yatim tertinggal. 2000×25 kolom = 50.000 parameter <
+    // batas protokol Postgres 65.535 — aman; 88rb baris kini ±45 panggilan.
+    for (let i = 0; i < rows.length; i += 2000) {
+      await db.snapshotRow.createMany({ data: rows.slice(i, i + 2000) });
     }
 
     if (result.prices.length > 0) {
@@ -321,34 +325,46 @@ export async function commitRun(runBatchId: string): Promise<{
       });
     }
 
-    for (const po of result.po) {
-      const header = await db.poHeader.create({
-        data: {
-          snapshotId: snapshot.id,
-          cabang: po.cabang,
-          restoName: po.restoName,
-          poNumber: po.poNumber,
-          tanggal: po.tanggal,
-          supplier: po.supplier,
-          itemCount: po.itemCount,
-          status: po.status,
-          statusPesanan: po.statusPesanan,
-          annotasi: po.annotasi ?? null,
-        },
-      });
-      if (po.items.length > 0) {
-        await db.poItem.createMany({
-          data: po.items.map((it) => ({
-            poHeaderId: header.id,
-            itemName: it.itemName,
-            qty: it.qty,
-            satuan: it.satuan,
-            status: it.status,
-            diterimaSebagian: it.diterimaSebagian,
-          })),
-        });
-      }
-    }
+    // Task 54: PO header dulu beruntun (77 PO = 154 panggilan kecil). Kini antre
+    // dengan 8 pekerja paralel (pool Supabase aman); tiap pekerja membuat
+    // header lalu item-nya — urutan dalam satu PO tetap terjaga.
+    const poQueue = [...result.po];
+    const poWorkers = Array.from(
+      { length: Math.min(8, poQueue.length) },
+      async () => {
+        for (;;) {
+          const po = poQueue.shift();
+          if (!po) return;
+          const header = await db.poHeader.create({
+            data: {
+              snapshotId: snapshot.id,
+              cabang: po.cabang,
+              restoName: po.restoName,
+              poNumber: po.poNumber,
+              tanggal: po.tanggal,
+              supplier: po.supplier,
+              itemCount: po.itemCount,
+              status: po.status,
+              statusPesanan: po.statusPesanan,
+              annotasi: po.annotasi ?? null,
+            },
+          });
+          if (po.items.length > 0) {
+            await db.poItem.createMany({
+              data: po.items.map((it) => ({
+                poHeaderId: header.id,
+                itemName: it.itemName,
+                qty: it.qty,
+                satuan: it.satuan,
+                status: it.status,
+                diterimaSebagian: it.diterimaSebagian,
+              })),
+            });
+          }
+        }
+      },
+    );
+    await Promise.all(poWorkers);
 
     // Tautkan DQ issue run ini ke snapshot. Promosi ACTIVE + supersede periode
     // lama + committedAt DIBUNGKUS SATU TRANSAKSI (audit 48-g-data): komit ganda
@@ -431,7 +447,8 @@ export function toSnapshotSummary(row: {
   return {
     id: row.id,
     periodKey: row.periodKey,
-    state: row.state === "ACTIVE" ? "ACTIVE" : "SUPERSEDED",
+    state:
+      row.state === "ACTIVE" ? "ACTIVE" : row.state === "BUILDING" ? "BUILDING" : "SUPERSEDED",
     restoCount: row.restoCount,
     itemCount: row.itemCount,
     rowCount: row.rowCount,

@@ -210,7 +210,10 @@ export interface EngineHealth {
 export interface SnapshotSummary {
   id: string;
   periodKey: string;
-  state: "ACTIVE" | "SUPERSEDED";
+  /** BUILDING = komit mati di tengah jalan (snapshot setengah jadi — belum
+   *  pernah terlihat di analisis); bisa dihapus lewat tab Konfigurasi setelah
+   *  ±15 menit (Task 54 — jujur, bukan lagi ditampilkan sebagai SUPERSEDED). */
+  state: "ACTIVE" | "SUPERSEDED" | "BUILDING";
   restoCount: number;
   itemCount: number;
   rowCount: number;

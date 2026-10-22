@@ -65,3 +65,62 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   };
   return NextResponse.json(detail);
 }
+
+/**
+ * DELETE /api/runs/[id] — hapus run dari riwayat (Task 54: user meminta
+ * pembersihan run demo/uji yang menumpuk). Jujur soal relasi:
+ *  - Run YANG PUNYA snapshot → ditolak: hapus snapshot dulu di tab Konfigurasi
+ *    (snapshot adalah data analisis yang sudah dikomit, bukan milik riwayat).
+ *  - Run yang sedang dirakit job agent (RUNNING/FINALIZING) → ditolak.
+ *  - Ikut terhapus cascade: DQIssue, SourceFile, PriceHistory, dan AgentResult
+ *    (tabel tanpa relasi FK — dibersihkan manual di transaksi yang sama).
+ */
+export async function DELETE(_req: NextRequest, ctx: Ctx) {
+  const { id } = await ctx.params;
+  const run = await db.runBatch.findUnique({
+    where: { id },
+    include: { snapshot: { select: { id: true, periodKey: true, state: true } } },
+  });
+  if (!run) {
+    return NextResponse.json({ error: "Run tidak ditemukan." }, { status: 404 });
+  }
+  if (run.snapshot) {
+    return NextResponse.json(
+      {
+        error: `Run ini punya snapshot periode ${run.snapshot.periodKey} (${run.snapshot.state}) — hapus snapshot-nya dulu di tab Konfigurasi, barulah run bisa dihapus dari riwayat.`,
+      },
+      { status: 409 },
+    );
+  }
+  const inflight = await db.agentJob.findFirst({
+    where: { runBatchId: id, status: { in: ["RUNNING", "FINALIZING"] } },
+    select: { id: true },
+  });
+  if (inflight) {
+    return NextResponse.json(
+      { error: "Run ini sedang dirakit dari job agent yang berjalan — tunggu job selesai dulu." },
+      { status: 409 },
+    );
+  }
+  const periodKey = run.periodKey;
+  await db.$transaction([
+    db.agentResult.deleteMany({ where: { runBatchId: id } }),
+    db.runBatch.delete({ where: { id } }),
+  ]);
+  await db.auditLog.create({
+    data: {
+      action: "RUN_DELETE",
+      entity: "RunBatch",
+      entityId: id,
+      detailJson: JSON.stringify({
+        periodKey,
+        bundleName: run.bundleName,
+        engineKind: run.engineKind,
+        status: run.status,
+        rowCount: parseJsonSafe<{ rowCount?: number } | null>(run.summaryJson, null)?.rowCount ?? null,
+      }),
+      actor: "analyst",
+    },
+  });
+  return NextResponse.json({ ok: true, id, periodKey });
+}

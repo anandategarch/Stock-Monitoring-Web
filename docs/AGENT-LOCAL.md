@@ -9,6 +9,38 @@
 > laptop — situs (serverless Vercel) hanya menerima hasilnya, jadi **bebas dari
 > batas 60 detik / kuota /tmp / body 4,5 MB**.
 
+## Alur lengkap sehari-hari (Task 54 — "terus aku tekan apa?")
+
+Tidak ada tombol rahasia — seluruh alurnya hanya 5 langkah:
+
+1. **Web** — tab 🚀 *Proses & Ingest* → mode **Produksi** → **centang folder**
+   sumber di daftar → (boleh) isi nama run → pastikan **TANGGAL H** & **AMBANG ACR**.
+2. **Web** — tekan **“Kirim N Folder → Laptop (Proses Python)”**. Job masuk papan;
+   agent online menjemputnya dalam hitungan detik.
+3. **Laptop (otomatis, tidak perlu ditekan apa pun)** — agent menyalin Excel dari
+   disk C (mode *Disk Lokal / Otomatis*) atau mengunduh dari Drive → engine FastAPI
+   lokal memproses (pipeline asli v3.9.71) → hasil diunggah ke web.
+4. **Web** — kartu job menunjukkan kemajuan → saat **SELESAI**, pratinjau run
+   terbuka otomatis di panel bawah. **Tinjau** (ringkasan, manifest file, isu DQ,
+   log pipeline) → tekan **Komit Snapshot** → snapshot periode tersimpan permanen
+   (FR-4: tidak pernah menimpa snapshot lama diam-diam — periode sama menandai
+   yang lama *SUPERSEDED*).
+5. **Web** — buka tab analisis (Deviasi, Selisih IN, PO Menunggu, Pivot, Nominal,
+   Follow-Up, Laporan) dan pilih periodenya. Selesai. Bulan berikutnya: ulangi
+   langkah 1–5 dengan periode baru.
+
+> **Komit run besar (±88 ribu baris):** penulisan snapshot ke database sudah
+> dioptimalkan (chunk 2.000 baris + PO paralel, Task 54) supaya muat batas
+> 60 dtk fungsi serverless. Bila komit terputus di tengah (listrik/internet),
+> snapshot setengah jadi tampil sebagai **BUILDING (komit terputus)** di tab
+> Konfigurasi — setelah ±15 menit bisa dihapus, lalu tekan **Komit** ulang;
+> data lama tidak pernah tersentuh (NFR-3).
+>
+> **Membersihkan riwayat:** tombol 🗑 per baris run di *Riwayat run* (run demo /
+> uji yang menumpuk boleh dihapus). Run yang sudah dikomit ditolak sampai
+> snapshot-nya dihapus dulu di tab **Konfigurasi** — snapshot adalah data
+> analisis, riwayat hanyalah catatan proses.
+
 ## Cara paling gampang — SEKALI KLIK (rekomendasi)
 
 Setelah repo ada di laptop (clone sekali: `git clone

@@ -547,7 +547,7 @@ class StackController:
             time.sleep(1.0)
             if self._engine_health():
                 dur = int(time.time() - t0)
-                LOG.emit(f"Engine FastAPI siatap {self.engine_url} ({dur} dtk).", "OK")
+                LOG.emit(f"Engine FastAPI siap di {self.engine_url} ({dur} dtk).", "OK")
                 return True
         LOG.emit("Engine tidak menjawab /health dalam 180 dtk.", "ERR")
         return False
