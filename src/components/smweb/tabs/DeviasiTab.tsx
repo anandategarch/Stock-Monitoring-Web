@@ -4,6 +4,10 @@
 // diubah, rank nominal per resto (§61/62), sort sisi klien, tombol +FU → kasus follow-up
 // (FR-43), klik baris → drill-down (FR-32). TANGGAL H & AMBANG ACR satu sumber untuk
 // GR dan PCS (paritas v3.9.21) dan terikat store (INV-8).
+// Task 33: #2 toggle "Warna ala desktop" (latar amber kolom kunci + teks baris per
+// label CEK utama — mirror deviasi_view.py v3.9.71); #3 susunan "Per Barang"
+// (kelompok nama barang + rank method=min per kelompok — mirror v3.9.65 / 01.1 CEK
+// STOCK V2.xlsb, dev=0 → kosong).
 
 import { useEffect, useMemo, useState } from "react";
 import { Database, FileWarning, Play, Plus } from "lucide-react";
@@ -23,6 +27,9 @@ import { CekBadgeList } from "@/components/smweb/badges";
 import { EmptyState } from "@/components/smweb/empty-state";
 import { DrilldownSheet, type DrilldownTarget } from "@/components/smweb/drilldown-sheet";
 import { mergeCekLabels } from "@/lib/cek";
+import {
+  cekRowTextClass, DEV_KEYCOL_BG, naturalCompare, rankMinInGroups,
+} from "@/lib/desktop-parity";
 import { CEK_LABELS, type CekLabel, type DeviasiRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { fmtInt, fmtQty, fmtRp, signedQtyClass, signedRpClass } from "@/lib/format";
@@ -81,6 +88,7 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
   const {
     devGroup, setDevGroup, devResto, setDevResto, devH, setDevH,
     devAmbang, setDevAmbang, setActiveTab,
+    devRowColor, setDevRowColor, devLayout, setDevLayout, uiCompact,
   } = useSmStore();
 
   const [drillTarget, setDrillTarget] = useState<DrilldownTarget | null>(null);
@@ -119,6 +127,20 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
     [data, devAmbang],
   );
 
+  // Rank per KELOMPOK nama barang (Task 33 #3) — mirror desktop v3.9.65
+  // (deviasi_view.py:2566-2572): |Deviasi H| desc method=min di dalam kelompok
+  // nama barang, atas frame terfilter; dev=0/tanpa data → KOSONG. Hanya dihitung
+  // saat mode kelompok; mode flat tetap memakai rankNominal per resto (server).
+  const groupRankByRow = useMemo(() => {
+    if (devLayout !== "kelompok") return null;
+    const byWrapper = rankMinInGroups(
+      enriched, (vr) => vr.row.itemName, (vr) => vr.row.deviasiH,
+    );
+    const byRow = new Map<DeviasiRow, number | null>();
+    for (const [vr, rank] of byWrapper) byRow.set(vr.row, rank);
+    return byRow;
+  }, [devLayout, enriched]);
+
   const filterAktif = search.trim() !== "" || cekFilter !== "" || onlyDev || devResto !== "";
 
   const visible = useMemo(() => {
@@ -141,10 +163,29 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
 
     const dir = sortDir === "asc" ? 1 : -1;
     const mag = (v: number | null) => (v === null ? null : Math.abs(v));
+    // Mode KELOMPOK (Task 33 #3): layout default desktop — nama barang asc
+    // (natural) lalu |Deviasi H| desc di dalam kelompok (mirror v3.9.65).
+    // Kondisi mencakup sortKey "devH"+desc (default local useState) supaya
+    // layout bertahan PASCA-RELOAD: sortKey tidak dipersist, devLayout iya.
+    const kelompokDefault =
+      devLayout === "kelompok" &&
+      (sortKey === "nama" || (sortKey === "devH" && sortDir === "desc"));
+    if (kelompokDefault) {
+      out.sort((a, b) => {
+        const c = sortKey === "nama"
+          ? dir * naturalCompare(a.row.itemName, b.row.itemName)
+          : naturalCompare(a.row.itemName, b.row.itemName);
+        if (c !== 0) return c;
+        return Math.abs(b.row.deviasiH ?? 0) - Math.abs(a.row.deviasiH ?? 0);
+      });
+      return out;
+    }
     const sortVal = (r: DeviasiRow): number | null =>
       sortKey === "devH" ? mag(r.deviasiH)
         : sortKey === "nominalBulan" ? mag(r.nominalBulan)
-          : r.rankNominal;
+          : sortKey === "rank"
+            ? (groupRankByRow ? groupRankByRow.get(r) ?? null : r.rankNominal)
+            : r.rankNominal;
     out.sort((a, b) => {
       if (sortKey === "nama") return dir * a.row.itemName.localeCompare(b.row.itemName, "id");
       const av = sortVal(a.row);
@@ -155,7 +196,7 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
       return dir * (av - bv);
     });
     return out;
-  }, [enriched, search, cekFilter, onlyDev, sortKey, sortDir]);
+  }, [enriched, search, cekFilter, onlyDev, sortKey, sortDir, devLayout, groupRankByRow]);
 
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) {
@@ -219,7 +260,9 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
           Wide-matrix deviasi bertanda per resto × barang — gabungan tab Deviasi GR + PCS
           desktop. TANGGAL H &amp; AMBANG ACR di sini satu sumber untuk GR dan PCS
           (paritas v3.9.21); label CEK “ACR to BOM” langsung dihitung ulang saat ambang
-          diubah. Klik baris untuk drill-down.
+          diubah. Klik baris untuk drill-down. Susun “Per Barang” menata baris per
+          kelompok nama barang dengan rank per kelompok ala desktop; “Warna ala
+          desktop” menyalakan latar kolom kerja + warna teks per label CEK.
         </p>
       </header>
 
@@ -241,6 +284,38 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
             <ToggleGroupItem value="GR" className={cn("h-9 px-4", SEG_ON)}>GR</ToggleGroupItem>
             <ToggleGroupItem value="PCS" className={cn("h-9 px-4", SEG_ON)}>PCS</ToggleGroupItem>
           </ToggleGroup>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <span id="dev-layout-label" className="text-xs font-medium text-muted-foreground">Susun</span>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            value={devLayout}
+            onValueChange={(v) => {
+              if (v === "flat" || v === "kelompok") {
+                setDevLayout(v);
+                // Sort header mengikuti mode: kelompok = layout desktop (nama asc
+                // + |Dev H| desc per kelompok); flat = default lama (|Dev H| desc).
+                if (v === "kelompok") {
+                  setSortKey("nama");
+                  setSortDir("asc");
+                } else {
+                  setSortKey("devH");
+                  setSortDir("desc");
+                }
+              }
+            }}
+            aria-labelledby="dev-layout-label"
+          >
+            <ToggleGroupItem value="flat" className={cn("h-9 px-3", SEG_ON)}>Rata</ToggleGroupItem>
+            <ToggleGroupItem value="kelompok" className={cn("h-9 px-3", SEG_ON)}>Per Barang</ToggleGroupItem>
+          </ToggleGroup>
+          <p className="text-[11px] text-muted-foreground">
+            {devLayout === "kelompok"
+              ? "Kelompok nama barang + rank per kelompok (ala desktop)"
+              : "Sort bebas per kolom (default |Deviasi H| desc)"}
+          </p>
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -329,6 +404,13 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
           <Switch id="dev-only" checked={onlyDev} onCheckedChange={setOnlyDev} />
           <Label htmlFor="dev-only" className="text-xs">Hanya baris deviasi H ≠ 0</Label>
         </div>
+
+        <div className="flex items-center gap-2 pb-0.5">
+          <Switch id="dev-row-color" checked={devRowColor} onCheckedChange={setDevRowColor} />
+          <Label htmlFor="dev-row-color" className="text-xs" title="Latar amber kolom kerja (Deviasi/Nominal H) + warna teks baris per label CEK utama — mirror desktop">
+            Warna ala desktop
+          </Label>
+        </div>
       </section>
 
       {isPending ? (
@@ -408,7 +490,9 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
                     active={sortKey === "rank"}
                     dir={sortDir}
                     onSort={() => toggleSort("rank")}
-                    title="Peringkat |nominal bulan| di dalam resto — dev 0/blank → kosong (kontrak §61/62)"
+                    title={devLayout === "kelompok"
+                      ? "Peringkat |Deviasi H| dalam kelompok nama barang — mirror desktop v3.9.65 (method=min; deviasi 0/tanpa data → kosong)"
+                      : "Peringkat |nominal bulan| di dalam resto — dev 0/blank → kosong (kontrak §61/62)"}
                     className="text-right"
                   />
                   <th
@@ -431,19 +515,35 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
                     </td>
                   </tr>
                 ) : (
-                  visible.map(({ row, cekMerged }) => (
+                  visible.map(({ row, cekMerged }, i) => {
+                    // Batas kelompok (mode Per Barang): hairline netral — bukan
+                    // "sekat warna" desktop era lama (dihapus atas permintaan
+                    // pemilik v3.9.61), hanya garis tipis penanda ganti kelompok.
+                    const isGroupStart =
+                      devLayout === "kelompok" &&
+                      (i === 0 || visible[i - 1].row.itemName !== row.itemName);
+                    const sepCls = isGroupStart ? "border-t border-border/70" : "";
+                    // Warna teks baris ala desktop: label CEK utama → fg (mirror
+                    // deviasi_view.py:2774-2788). Kosong bila netral/toggle mati.
+                    const rowText = devRowColor ? cekRowTextClass(cekMerged) : "";
+                    // Rank mode kelompok (method=min per barang) vs mode flat
+                    // (rankNominal per resto dari server — kontrak §61/62).
+                    const rankVal = groupRankByRow
+                      ? (groupRankByRow.get(row) ?? null)
+                      : row.rankNominal;
+                    return (
                     <tr
                       key={row.fingerprint}
                       className="cursor-pointer hover:bg-muted/40"
                       onClick={() => setDrillTarget({ resto: row.restoCode, item: row.itemName })}
                     >
                       {devResto === "" ? (
-                        <td className="whitespace-nowrap border-b border-border/60 px-2.5 py-1.5">
+                        <td className={cn("whitespace-nowrap border-b border-border/60 px-2.5 py-1.5", sepCls, rowText)}>
                           <span className="font-medium">{row.restoCode}</span>
                           <span className="block text-[11px] text-muted-foreground">{row.restoName}</span>
                         </td>
                       ) : null}
-                      <td className="border-b border-border/60 px-2.5 py-1.5">
+                      <td className={cn("border-b border-border/60 px-2.5 py-1.5", sepCls, rowText)}>
                         <button
                           type="button"
                           onClick={(e) => {
@@ -454,47 +554,79 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
                           aria-label={`Buka rincian ${row.itemName} (${row.restoCode})`}
                         >
                           {row.itemName}
-                        </button>
-                        <span className="block text-[11px] text-muted-foreground">
-                          {row.satuan}
-                          {!row.konversiOk ? (
-                            <span
-                              className="text-amber-600 dark:text-amber-400"
-                              title="Konversi satuan gagal — nominal null (INV-3)"
-                            >
-                              {" "}*
+                          {/* Mode rapat: satuan + penanda * ikut DALAM tombol nowrap —
+                              mirror kolom Nama Barang + Satuan desktop (1 baris);
+                              subline span lama (wrappable) memaksa nama panjang
+                              melipat ke 2 baris dan menggembungkan tinggi baris. */}
+                          {uiCompact ? (
+                            <span className="font-normal text-muted-foreground">
+                              {" "}{row.satuan}
+                              {!row.konversiOk ? (
+                                <span
+                                  className="text-amber-600 dark:text-amber-400"
+                                  title="Konversi satuan gagal — nominal null (INV-3)"
+                                >
+                                  {" "}*
+                                </span>
+                              ) : null}
                             </span>
                           ) : null}
-                        </span>
+                        </button>
+                        {!uiCompact ? (
+                          <span className="block text-[11px] text-muted-foreground">
+                            {row.satuan}
+                            {!row.konversiOk ? (
+                              <span
+                                className="text-amber-600 dark:text-amber-400"
+                                title="Konversi satuan gagal — nominal null (INV-3)"
+                              >
+                                {" "}*
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : null}
                       </td>
-                      <td className="border-b border-border/60 px-2.5 py-1.5 text-muted-foreground">
+                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-muted-foreground", sepCls)}>
                         {row.kategori}
                       </td>
-                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num", signedQtyClass(row.deviasiH))}>
+                      <td className={cn(
+                        "border-b border-border/60 px-2.5 py-1.5 text-right cell-num",
+                        sepCls,
+                        // Latar kolom kunci ala desktop #fef3c7 (HIGHLIGHT_BG
+                        // deviasi_view.py:523-524 — kolom Deviasi & SO_H; analog
+                        // web: Deviasi H + Nominal H) — hanya saat toggle aktif.
+                        devRowColor && DEV_KEYCOL_BG,
+                        signedQtyClass(row.deviasiH),
+                      )}>
                         {row.deviasiH === null ? <span className="text-muted-foreground/50">—</span> : fmtQty(row.deviasiH)}
                       </td>
-                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num", signedQtyClass(row.deviasiBulan))}>
+                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num", sepCls, signedQtyClass(row.deviasiBulan))}>
                         {row.deviasiBulan === null ? <span className="text-muted-foreground/50">—</span> : fmtQty(row.deviasiBulan)}
                       </td>
-                      <td className="border-b border-border/60 px-2.5 py-1.5 text-right cell-num text-muted-foreground">
+                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num text-muted-foreground", sepCls)}>
                         {fmtQty(row.acrTotal)}
                       </td>
-                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num", signedRpClass(row.nominalH))}>
+                      <td className={cn(
+                        "border-b border-border/60 px-2.5 py-1.5 text-right cell-num",
+                        sepCls,
+                        devRowColor && DEV_KEYCOL_BG,
+                        signedRpClass(row.nominalH),
+                      )}>
                         {row.nominalH === null ? <span className="text-muted-foreground/50">—</span> : fmtRp(row.nominalH)}
                       </td>
-                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num", signedRpClass(row.nominalBulan))}>
+                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num", sepCls, signedRpClass(row.nominalBulan))}>
                         {row.nominalBulan === null ? <span className="text-muted-foreground/50">—</span> : fmtRp(row.nominalBulan)}
                       </td>
-                      <td className="border-b border-border/60 px-2.5 py-1.5 text-right cell-num">
-                        {row.rankNominal === null ? <span className="text-muted-foreground/50">—</span> : fmtInt(row.rankNominal)}
+                      <td className={cn("border-b border-border/60 px-2.5 py-1.5 text-right cell-num", sepCls)}>
+                        {rankVal === null ? <span className="text-muted-foreground/50">—</span> : fmtInt(rankVal)}
                       </td>
-                      <td className="border-b border-border/60 px-2.5 py-1.5">
-                        <CekBadgeList cek={cekMerged} auditNotes={row.auditNotes} compact />
+                      <td className={cn("border-b border-border/60 px-2.5 py-1.5", sepCls, uiCompact && "max-w-[210px]")}>
+                        <CekBadgeList cek={cekMerged} auditNotes={row.auditNotes} compact asText={uiCompact} />
                       </td>
-                      <td className="border-b border-border/60 px-2.5 py-1 text-center">
+                      <td className={cn("border-b border-border/60 px-2.5 py-1 text-center", sepCls)}>
                         <Button
                           variant="outline"
-                          className="h-9 px-2.5 text-xs"
+                          className={cn(uiCompact ? "h-6" : "h-9", "px-2.5 text-xs")}
                           disabled={createCase.isPending}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -506,7 +638,8 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
                         </Button>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -520,7 +653,17 @@ export default function DeviasiTab({ snapshotId }: { snapshotId: string | null }
             <p>
               <span className="text-muted-foreground/50">“—”</span> = tidak ada data (missing ≠ 0 — INV-1) ·
               minus = kekurangan, bertanda (INV-2) · * = konversi satuan gagal (INV-3)
+              {devRowColor ? (
+                <>· <span className="text-[#92400e] dark:text-amber-300">teks baris</span> = label CEK utama (ala desktop)</>
+              ) : null}
             </p>
+            {devLayout === "kelompok" ? (
+              <p>
+                Susunan <span className="font-medium text-foreground">Per Barang</span>:
+                nama asc (natural) lalu |Deviasi H| desc · Rank = method=min dalam
+                kelompok (mirror desktop v3.9.65) · garis tipis = batas kelompok
+              </p>
+            ) : null}
           </div>
         </section>
       ) : null}

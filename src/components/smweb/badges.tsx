@@ -45,10 +45,25 @@ export function CaseStatusBadge({ status }: { status: string }) {
   return <Badge variant="secondary">{label}</Badge>;
 }
 
-/** Label CEK + tooltip keterangan (9 label kanonik). */
-export function CekBadgeList({ cek, auditNotes, compact }: { cek: CekLabel[]; auditNotes?: AuditNote[]; compact?: boolean }) {
+/** Label CEK + tooltip keterangan (9 label kanonik).
+ *  `asText` (mode Tampilan Rapat): render sebagai TEKS inline "A · B" —
+ *  mirror kolom CEK desktop (satu baris teks, bukan badge) supaya tinggi
+ *  baris rapat benar-benar ±24px ala Treeview; keterangan tetap via title. */
+export function CekBadgeList({ cek, auditNotes, compact, asText }: { cek: CekLabel[]; auditNotes?: AuditNote[]; compact?: boolean; asText?: boolean }) {
   if (cek.length === 0 && (!auditNotes || auditNotes.length === 0)) {
     return <span className="text-muted-foreground text-xs">—</span>;
+  }
+  if (asText) {
+    const parts = [...cek, ...(auditNotes ?? []).map((n) => `Audit ${n}` as const)];
+    const notes = [...cek.map((c) => CEK_NOTE_MAP[c]), ...(auditNotes ?? []).map((n) => AUDIT_NOTE_TEXT[n])];
+    return (
+      <span
+        className="block overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-tight"
+        title={notes.filter(Boolean).join(" · ")}
+      >
+        {parts.join(" · ")}
+      </span>
+    );
   }
   return (
     <TooltipProvider delayDuration={200}>

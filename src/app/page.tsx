@@ -2,11 +2,11 @@
 // Sticky footer: mt-auto dalam flex-col min-h-screen (aturan platform).
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useTheme } from "next-themes";
 import {
   Activity, BadgeCheck, Boxes, ClipboardList, FlaskConical, LayoutDashboard,
-  Moon, PackageSearch, PieChart, Play, ScrollText, Settings, ShoppingCart, Sun, Table2,
+  Moon, PackageSearch, PieChart, Play, Rows3, ScrollText, Settings, ShoppingCart, Sun, Table2,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -56,10 +56,37 @@ function ThemeToggle() {
   );
 }
 
+/** Toggle Tampilan Rapat (Task 33 fitur #1) — densitas tabel ala Treeview
+ *  desktop zoom 80% (font 8pt / baris ±24px). Global: html[data-density]. */
+function DensityToggle({ compact, onToggle }: { compact: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      variant={compact ? "secondary" : "ghost"}
+      size="icon"
+      aria-pressed={compact}
+      aria-label={compact ? "Tampilan rapat AKTIF — klik untuk tampilan normal" : "Tampilan rapat (densitas tabel ala desktop)"}
+      title={compact ? "Tampilan rapat AKTIF — klik untuk tampilan normal" : "Tampilan rapat (densitas tabel ala desktop)"}
+      onClick={onToggle}
+      className="relative"
+    >
+      <Rows3 className="h-4 w-4" aria-hidden />
+      {compact ? (
+        <span aria-hidden className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-emerald-500" />
+      ) : null}
+    </Button>
+  );
+}
+
 export default function Page() {
-  const { activeTab, setActiveTab, periodKey, setPeriodKey } = useSmStore();
+  const { activeTab, setActiveTab, periodKey, setPeriodKey, uiCompact, setUiCompact } = useSmStore();
   const { data: snapshotsData, isPending: snapsPending } = useSnapshots();
   const { data: engineHealth } = useEngineHealth();
+
+  // Mode Tampilan Rapat: diterapkan global lewat atribut <html data-density>
+  // (CSS di globals.css menangkap SEMUA tabel tanpa per-sel — lihat Task 33 #1).
+  useEffect(() => {
+    document.documentElement.dataset.density = uiCompact ? "compact" : "default";
+  }, [uiCompact]);
 
   const activeSnapshots = useMemo(
     () => (snapshotsData?.snapshots ?? []).filter((s) => s.state === "ACTIVE"),
@@ -153,6 +180,7 @@ export default function Page() {
               ) : null}
 
               <ThemeToggle />
+              <DensityToggle compact={uiCompact} onToggle={() => setUiCompact(!uiCompact)} />
             </div>
           </div>
 

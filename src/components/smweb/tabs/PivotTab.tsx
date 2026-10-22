@@ -3,6 +3,9 @@
 // per-tanggal (kolom resto), kolom nama barang di-freeze saat scroll horizontal (kontrak
 // §84), sel "—" ≠ 0 (INV-1), klik sel → drill-down rincian harian (FR-32).
 // Semua kontrol terikat store sehingga persist per sesi (INV-8).
+// Task 33 #2: toggle "Warna ala desktop" — baris pastel per metrik (mirror
+// METRIC_BG pivot_view.py:155-166), fg khusus IN/BM (in_row/bm_row), dan sel
+// 7.Selisih IN ≠ 0 → #FFC9C9 (pivot_view.py _compute_row_tags).
 
 import { useEffect, useMemo, useState } from "react";
 import { Database, FileWarning, Play } from "lucide-react";
@@ -19,6 +22,9 @@ import { usePivot, useRestos } from "@/hooks/use-sm-api";
 import { useSmStore } from "@/store/use-sm-store";
 import { EmptyState } from "@/components/smweb/empty-state";
 import { DrilldownSheet, type DrilldownTarget } from "@/components/smweb/drilldown-sheet";
+import {
+  metricPastelClass, metricValueFgClass, SIN_ANOMALY_BG,
+} from "@/lib/desktop-parity";
 import { METRICS, type MetricKey } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { fmtInt, fmtQty, signedQtyClass } from "@/lib/format";
@@ -32,7 +38,7 @@ export default function PivotTab({ snapshotId }: { snapshotId: string | null }) 
   const {
     pivotMode, setPivotMode, pivotMetric, setPivotMetric, pivotResto, setPivotResto,
     pivotDay, setPivotDay, pivotFrom, setPivotFrom, pivotTo, setPivotTo,
-    pivotHideEmpty, setPivotHideEmpty, setActiveTab,
+    pivotHideEmpty, setPivotHideEmpty, pivotRowColor, setPivotRowColor, setActiveTab,
   } = useSmStore();
   const [drillTarget, setDrillTarget] = useState<DrilldownTarget | null>(null);
 
@@ -214,6 +220,17 @@ export default function PivotTab({ snapshotId }: { snapshotId: string | null }) 
           <Switch id="pivot-hide-empty" checked={pivotHideEmpty} onCheckedChange={setPivotHideEmpty} />
           <Label htmlFor="pivot-hide-empty" className="text-xs">Sembunyikan baris kosong (semua sel 0)</Label>
         </div>
+
+        <div className="flex items-center gap-2 pb-0.5">
+          <Switch id="pivot-row-color" checked={pivotRowColor} onCheckedChange={setPivotRowColor} />
+          <Label
+            htmlFor="pivot-row-color"
+            className="text-xs"
+            title="Baris pastel per metrik + sel Selisih IN ≠ 0 merah muda + minus merah semua metrik — mirror pivot desktop"
+          >
+            Warna ala desktop
+          </Label>
+        </div>
       </section>
 
       {noRestos ? (
@@ -272,7 +289,16 @@ export default function PivotTab({ snapshotId }: { snapshotId: string | null }) 
                   </tr>
                 ) : (
                   rows.map((row) => (
-                    <tr key={`${row.itemName}|${row.satuan}`} className="group">
+                    <tr
+                      key={`${row.itemName}|${row.satuan}`}
+                      className={cn(
+                        "group",
+                        // Pastel baris per metrik ala desktop (METRIC_BG) — hanya
+                        // saat toggle aktif. Kolom nama beku tetap bg-background,
+                        // cermin pane beku FrozenNamePane desktop.
+                        pivotRowColor && metricPastelClass(pivotMetric),
+                      )}
+                    >
                       <td className="sticky left-0 z-10 min-w-[220px] max-w-[280px] whitespace-normal border-r border-b border-border/60 bg-background px-3 py-1.5 group-hover:bg-muted/40">
                         <span className="block font-medium leading-tight">{row.itemName}</span>
                         <span className="block text-[11px] text-muted-foreground">{row.satuan} · {row.kategori}</span>
@@ -299,7 +325,20 @@ export default function PivotTab({ snapshotId }: { snapshotId: string | null }) 
                               {v === null ? (
                                 <span className="text-muted-foreground/50">—</span>
                               ) : (
-                                <span className={cn("cell-num", pivotMetric === "qtyDeviasi" && signedQtyClass(v))}>
+                                <span className={cn(
+                                  "cell-num",
+                                  pivotRowColor
+                                    ? cn(
+                                        // Paritas warna ala desktop: minus merah
+                                        // untuk SEMUA metrik (neg_cell) + fg khusus
+                                        // IN/BM (in_row/bm_row) + sel anomali
+                                        // 7.Selisih IN ≠ 0 (#FFC9C9).
+                                        metricValueFgClass(pivotMetric),
+                                        v < 0 && signedQtyClass(v),
+                                        pivotMetric === "qtySelisihIN" && v !== 0 && SIN_ANOMALY_BG,
+                                      )
+                                    : pivotMetric === "qtyDeviasi" && signedQtyClass(v),
+                                )}>
                                   {fmtQty(v)}
                                 </span>
                               )}
@@ -322,6 +361,9 @@ export default function PivotTab({ snapshotId }: { snapshotId: string | null }) 
             <p>
               <span className="text-muted-foreground/50">“—”</span> = tidak ada data (missing ≠ 0,
               INV-1) · 0 = benar-benar nol
+              {pivotRowColor ? (
+                <>· <span className="text-[#9C5700] dark:text-amber-200">pastel baris</span> = metrik aktif (ala desktop){pivotMetric === "qtySelisihIN" ? <> · <span className="bg-[#FFC9C9] dark:bg-rose-500/25 px-1">merah muda</span> = Selisih IN ≠ 0</> : null}</>
+              ) : null}
             </p>
           </div>
         </section>
