@@ -1,10 +1,11 @@
-# Agent Lokal — "Python di Laptop" (Task 51 + launcher sekali-klik Task 52)
+# Agent Lokal — "Python di Laptop" (Task 51 + launcher sekali-klik Task 52 + Sumber Data disk lokal Task 53)
 
 > **Idenya:** kamu klik **"Kirim N Folder → Laptop (Proses Python)"** di web →
-> Python di laptopmu menjemput job → **menarik file Google Drive + menjalankan
-> engine FastAPI (pipeline asli v3.9.71) secara LOKAL** → hasil diunggah ke web →
+> Python di laptopmu menjemput job → **menarik file Google Drive ATAU menyalin
+> langsung dari folder data di disk lokal, lalu menjalankan engine FastAPI
+> (pipeline asli v3.9.71) secara LOKAL** → hasil diunggah ke web →
 > **tampil di web sebagai run pratinjau** → kamu menekan **Komit** di web.
-> Seluruh pekerjaan berat (unduh 100–300 MB, pipeline 79 ribu baris) terjadi di
+> Seluruh pekerjaan berat (unduh/salin 100–300 MB, pipeline 79 ribu baris) terjadi di
 > laptop — situs (serverless Vercel) hanya menerima hasilnya, jadi **bebas dari
 > batas 60 detik / kuota /tmp / body 4,5 MB**.
 
@@ -32,13 +33,38 @@ Saat **pertama kali** dijalankan:
    agent.
 3. Dashboard kecil menampilkan **WEB ✓ · ENGINE ✓ · AGENT ✓**, job yang sedang
    diproses, dan log langsung dari engine + agent. Ada tombol **MULAI/BERHENTI**,
-   **Buka Web**, **Perbarui GitHub**, dan **Ubah Token**.
+   **Buka Web**, **Perbarui GitHub**, **Ubah Token**, dan **Sumber Data**.
 4. **Tinggalkan jendela terbuka** selama ingin tetap tersambung — tutup
    jendela (atau Ctrl+C) = putus dengan rapi. Agent punya `autostart` — begitu
    file dibuka semuanya menyala sendiri.
 
 Saat berikutnya: dobel-klik file yang sama — langsung jalan (kode ikut
 ter-update otomatis lewat git pull).
+
+## Sumber Data — Google Drive vs DISK LOKAL (Task 53)
+
+Sesuai permintaan ("tidak pakai Google Drive lagi, langsung dari disk C"), agent
+bisa membaca Excel langsung dari folder data di disk laptop — **setara
+`RootPath` aplikasi desktop**. Atur lewat tombol **Sumber Data** di launcher:
+
+| Pilihan | Perilaku |
+|---|---|
+| **Otomatis** (default) | Folder yang ada di disk → disalin dari disk; folder yang tidak ada → ditarik dari Google Drive (link yang dicentang di web). |
+| **Disk Lokal** | Tanpa Google Drive sama sekali. Folder yang tidak ada di disk diberi catatan jujur di log job (job tetap jalan dengan folder sisanya; bila SEMUA folder absen → job gagal dengan daftar folder yang hilang). |
+| **Google Drive** | Perilaku lama — selalu unduh dari Drive. |
+
+**Folder induk data lokal** (contoh: `C:\KERJA\1. RESTO\9.NEW QUERY`) harus
+berisi folder bernama sama persis dengan struktur desktop — `"1. DEVIASI
+WEEKLY"`, `"2. 22.05"`, `"3.1 42.15 Kirim"`, dst. Pencocokan judul folder
+**case-insensitive** (ala Windows). File Excel yang sedang dibuka di Excel
+(file kunci `~$…`) otomatis dilewati. Seleksi folder tetap dilakukan di web —
+kamu tetap mencentang folder mana yang dikirim ke laptop; yang berubah hanya
+**dari mana isinya dibaca**.
+
+Tersimpan di `laptop_config.json` (`data_source` + `local_root`), atau lewat
+CLI: `python mulai_laptop.py --source local --root "C:\\KERJA\\1. RESTO\\9.NEW QUERY"`.
+Untuk agent manual tanpa launcher: env `SMWEB_DATA_SOURCE` (auto|local|drive)
++ `SMWEB_LOCAL_ROOT`.
 
 Tanpa monitor/GUI (mis. SSH/server tanpa layar) launcher otomatis beralih ke
 **mode terminal**; paksa dengan `--console`. Opsi lain: `--once` (proses satu

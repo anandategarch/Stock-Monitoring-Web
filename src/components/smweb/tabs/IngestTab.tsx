@@ -653,8 +653,9 @@ export function IngestTab() {
           </div>
 
           {/* Proses via Python di Laptop (agent lokal) — Task 51.
-              Python di laptop menjemput job → menarik file Drive + engine FastAPI
-              LOKAL → hasil diunggah & tampil di web (pratinjau + komit). */}
+              Python di laptop menjemput job → menarik file (Drive / disk lokal —
+              Task 53) + engine FastAPI LOKAL → hasil diunggah & tampil di web
+              (pratinjau + komit). */}
           <div className="border-t pt-3 space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-64 flex-1">
@@ -662,11 +663,13 @@ export function IngestTab() {
                   <Laptop className="h-4 w-4" aria-hidden /> Proses via Python di Laptop (Agent)
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Python di laptop menjemput job ini, <strong>menarik file Drive &amp; memproses
-                  engine FastAPI secara lokal</strong> — bebas batas 60 dtk/kuota serverless — lalu
-                  hasilnya diunggah dan <strong>tampil di web ini</strong> (pratinjau + Komit di
-                  sini juga). Memakai link Drive yang dicentang di atas + parameter run di form
-                  bawah. Di laptop: <strong>dobel-klik <code className="text-[11px]">mulai-laptop.bat</code></strong>
+                  Python di laptop menjemput job ini, <strong>menyalin file dari folder data di
+                  disk lokal (tanpa Google Drive) atau menariknya dari Drive</strong> — sesuai
+                  tombol <em>Sumber Data</em> di launcher — lalu <strong>memproses engine FastAPI
+                  secara lokal</strong>, bebas batas 60 dtk/kuota serverless. Hasilnya diunggah dan{" "}
+                  <strong>tampil di web ini</strong> (pratinjau + Komit di sini juga). Memakai
+                  folder yang dicentang di atas + parameter run di form bawah. Di laptop:{" "}
+                  <strong>dobel-klik <code className="text-[11px]">mulai-laptop.bat</code></strong>
                   dari repo (Windows; <code className="text-[11px]">mulai-laptop.command</code> di
                   macOS) — engine + agent nyala otomatis sekali klik, token ditanya sekali
                   (panduan: <code className="text-[11px]">docs/AGENT-LOCAL.md</code>).

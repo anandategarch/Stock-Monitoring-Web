@@ -21,7 +21,10 @@ Yang otomatis dikerjakan launcher ini:
      jalan — tidak pernah membunuh engine milik orang lain).
   4. Menjalankan AGENT agent/smweb_laptop_agent.py dengan token dari
      laptop_config.json (file lokal, di-gitignore — token tidak pernah
-     masuk GitHub).
+     masuk GitHub). SUMBER DATA bisa dipilih lewat tombol "Sumber Data":
+     Google Drive (perilaku lama), folder data di DISK LOKAL langsung
+     (setara RootPath config.json desktop — tanpa unduh dari Drive),
+     atau OTOMATIS (disk dulu, sisanya Drive).
   5. Menampilkan status WEB ✓ / ENGINE ✓ / AGENT ✓ + job yang sedang
      diproses, lalu log langsung dari engine & agent.
 
@@ -74,6 +77,17 @@ DEFAULT_CONFIG = {
     "autostart": True,
     # Buka browser ke dashboard web setelah tersambung
     "open_dashboard": False,
+    # Sumber data job agent (Task 53 — "langsung dari disk C, tanpa Google Drive"):
+    #   "auto"  = folder ada di disk → salin dari disk; sisanya Google Drive
+    #   "local" = hanya disk — folder absen diberi catatan jujur di job
+    #   "drive" = selalu Google Drive (perilaku lama)
+    "data_source": "auto",
+    # Folder induk data lokal — setara RootPath config.json aplikasi desktop,
+    # mis. "C:\\KERJA\\1. RESTO\\9.NEW QUERY". Di dalamnya harus ada folder
+    # bernama sama dengan judul folder job ("1. DEVIASI WEEKLY", "2. 22.05",
+    # dst — persis struktur desktop). Dipakai saat data_source auto/local;
+    # diatur lewat tombol "Sumber Data" di launcher.
+    "local_root": "",
 }
 
 # Satu probe untuk semua dependensi engine (pandas<3 dst — requirements.txt)
@@ -292,6 +306,37 @@ class StackController:
                 "Token agent kosong — isi lewat tombol \u201cUbah Token\u201d "
                 "(nilainya sama dengan env AGENT_TOKEN di server web)."
             )
+
+        # 0b) Sumber data (Task 53) — validasi jujur sebelum menyala
+        src = str(self.cfg.get("data_source") or "auto").strip().lower() or "auto"
+        if src not in ("auto", "local", "drive"):
+            src = "auto"
+            self.cfg["data_source"] = "auto"
+        root = str(self.cfg.get("local_root") or "").strip()
+        if src == "local" and not root:
+            raise RuntimeError(
+                'data_source=local tetapi "local_root" kosong — atur lewat '
+                "tombol \u201cSumber Data\u201d (folder induk data, setara RootPath "
+                "config.json desktop)."
+            )
+        if src in ("auto", "local") and root:
+            if not os.path.isdir(root):
+                if src == "local":
+                    raise RuntimeError(
+                        'Folder data lokal tidak ditemukan: "%s" — perbaiki lewat '
+                        "tombol \u201cSumber Data\u201d." % root
+                    )
+                LOG.emit('Folder data lokal tidak ditemukan: "%s" — semua folder '
+                         "ditarik dari Google Drive (mode otomatis)." % root, "WARN")
+            else:
+                LOG.emit("Sumber data: %s — file Excel dibaca dari %s" % (
+                    "DISK LOKAL (tanpa Google Drive)" if src == "local"
+                    else "OTOMATIS (disk dulu, sisanya Drive)", root), "OK")
+        elif src == "drive":
+            LOG.emit("Sumber data: GOOGLE DRIVE (perilaku lama).", "OK")
+        else:  # auto tanpa root
+            LOG.emit("Sumber data: OTOMATIS — Google Drive (folder data lokal "
+                     "belum diatur; tombol \u201cSumber Data\u201d untuk memakai disk).", "OK")
 
         # 1) Perbarui kode (opsional, non-fatal)
         if self.cfg.get("auto_update") and not self.args.no_update:
@@ -516,6 +561,8 @@ class StackController:
         env["SMWEB_SERVER"] = str(self.cfg.get("server") or "").rstrip("/")
         env["SMWEB_AGENT_TOKEN"] = str(self.cfg.get("agent_token") or "")
         env["SMWEB_ENGINE_URL"] = self.engine_url
+        env["SMWEB_DATA_SOURCE"] = str(self.cfg.get("data_source") or "auto").strip().lower() or "auto"
+        env["SMWEB_LOCAL_ROOT"] = str(self.cfg.get("local_root") or "").strip()
         name = str(self.cfg.get("agent_name") or "").strip()
         if name:
             env["SMWEB_AGENT_NAME"] = name
@@ -830,6 +877,7 @@ class TkApp:
         self.btn_web = self._small_btn(small, "Buka Web", self.open_web)
         self.btn_git = self._small_btn(small, "Perbarui GitHub", self.on_git)
         self.btn_token = self._small_btn(small, "Ubah Token", self.on_token)
+        self.btn_source = self._small_btn(small, "Sumber Data", self.on_source)
 
         # Log
         logwrap = tk.Frame(self.root, bg="#ffffff", padx=14)
@@ -1036,6 +1084,90 @@ class TkApp:
                   cursor="hand2").pack(side="right")
         win.bind("<Return>", lambda _e: save())
 
+    def on_source(self):
+        self._source_dialog()
+
+    def _source_dialog(self) -> None:
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title("Sumber Data")
+        win.configure(bg="#ffffff", padx=16, pady=14)
+        win.grab_set()
+        tk.Label(
+            win, justify="left", wraplength=470, bg="#ffffff", fg="#334155",
+            font=("Segoe UI", 9),
+            text=(
+                "Dari mana agent mengambil file Excel saat job datang dari web?\n\n"
+                "• Otomatis — folder yang ada di disk disalin dari disk; yang "
+                "tidak ada ditarik dari Google Drive.\n"
+                "• Disk Lokal — tanpa Google Drive; folder yang tidak ada di "
+                "disk diberi catatan (job tetap jalan dengan folder sisanya).\n"
+                "• Google Drive — perilaku lama.\n\n"
+                "Folder induk data lokal = setara RootPath config.json aplikasi "
+                "desktop (di dalamnya ada folder \u201c1. DEVIASI WEEKLY\u201d, "
+                "\u201c2. 22.05\u201d, dst.). Berlaku saat MULAI berikutnya."
+            ),
+        ).pack(anchor="w")
+
+        src_var = tk.StringVar(value=str(self.cfg.get("data_source") or "auto"))
+        box = tk.Frame(win, bg="#ffffff")
+        box.pack(fill="x", pady=(10, 6))
+        for val, label in (
+            ("auto", "Otomatis — disk dulu, sisanya Drive"),
+            ("local", "Disk Lokal saja (tanpa Google Drive)"),
+            ("drive", "Google Drive saja (perilaku lama)"),
+        ):
+            tk.Radiobutton(box, text=label, value=val, variable=src_var,
+                           bg="#ffffff", fg="#334155", font=("Segoe UI", 9),
+                           activebackground="#ffffff", cursor="hand2"
+                           ).pack(anchor="w")
+
+        tk.Label(win, text="Folder induk data lokal (kosong = pakai Drive):",
+                 bg="#ffffff", fg="#334155", font=("Segoe UI", 9)).pack(anchor="w")
+        path_row = tk.Frame(win, bg="#ffffff")
+        path_row.pack(fill="x", pady=(4, 6))
+        path_var = tk.StringVar(value=str(self.cfg.get("local_root") or ""))
+        ent = tk.Entry(path_row, textvariable=path_var, width=52,
+                       font=("Consolas", 9), highlightthickness=1)
+        ent.pack(side="left", fill="x", expand=True)
+
+        def pick_folder():
+            try:
+                from tkinter import filedialog
+                chosen = filedialog.askdirectory(parent=win, title="Pilih folder induk data")
+                if chosen:
+                    path_var.set(chosen)
+            except Exception:
+                pass
+
+        tk.Button(path_row, text="Pilih…", command=pick_folder, bg="#ffffff",
+                  fg="#334155", relief="flat", font=("Segoe UI", 9), cursor="hand2",
+                  highlightthickness=1, highlightbackground="#cbd5e1",
+                  padx=8).pack(side="left", padx=(6, 0))
+
+        def save():
+            src = (src_var.get() or "auto").strip().lower()
+            self.cfg["data_source"] = src if src in ("auto", "local", "drive") else "auto"
+            self.cfg["local_root"] = path_var.get().strip()
+            save_config(self.cfg)
+            root = self.cfg["local_root"]
+            if src in ("auto", "local") and root and not os.path.isdir(root):
+                self._log_q(now_ts(), "",
+                           'Folder data lokal tidak ditemukan: "%s".' % root, "WARN")
+            self._log_q(now_ts(), "",
+                        "Sumber data tersimpan: %s%s" % (
+                            {"auto": "otomatis", "local": "disk lokal", "drive": "Google Drive"}[self.cfg["data_source"]],
+                            ' · %s' % root if root else ""), "OK")
+            self._log_q(now_ts(), "", "Berlaku saat MULAI berikutnya "
+                        "(kalau sedang berjalan: BERHENTI lalu MULAI).", "DIM")
+            win.destroy()
+
+        row = tk.Frame(win, bg="#ffffff")
+        row.pack(fill="x")
+        tk.Button(row, text="Simpan", command=save, bg="#16a34a", fg="#ffffff",
+                  relief="flat", font=("Segoe UI", 10, "bold"), padx=14, pady=4,
+                  cursor="hand2").pack(side="right")
+
     def on_close(self):
         try:
             self._log_q(now_ts(), "", "Jendela ditutup — menghentikan…", "DIM")
@@ -1080,6 +1212,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--token", help="override token agent (satu kali ini)")
     p.add_argument("--port", type=int, help="override port engine (default 3031)")
     p.add_argument("--name", help="override nama agent (tampil di badge web)")
+    p.add_argument("--source", choices=["auto", "drive", "local"],
+                   help="override sumber data job: auto (disk dulu, sisanya Drive), "
+                        "local (hanya disk), drive (hanya Google Drive)")
+    p.add_argument("--root", help="override folder induk data lokal (setara RootPath "
+                                   "config.json desktop, mis. C:\\KERJA\\1. RESTO\\9.NEW QUERY)")
     return p
 
 
@@ -1092,6 +1229,10 @@ def apply_overrides(cfg: dict, args) -> dict:
         cfg["engine_port"] = args.port
     if args.name:
         cfg["agent_name"] = args.name
+    if args.source:
+        cfg["data_source"] = args.source
+    if args.root:
+        cfg["local_root"] = args.root
     return cfg
 
 

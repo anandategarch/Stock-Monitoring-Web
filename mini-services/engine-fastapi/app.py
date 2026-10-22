@@ -19,6 +19,7 @@ Stateless & idempotent (FR-12): tidak ada state antar-request selain metrik
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -42,6 +43,21 @@ from src.pipeline.fn_audit import extract_po_pending             # noqa: E402
 import mapper                                                   # noqa: E402
 
 app = FastAPI(title=mapper.ENGINE_NAME, version=mapper.ENGINE_VERSION)
+
+
+class _QuietHealthFilter(logging.Filter):
+    """GET /health dipolling launcher + agent tiap ±3 dtk — barisnya hanya
+    menambah kebisingan log (UX launcher: "kenapa log-nya selalu gitu?").
+    Akses /health DIHAPUS dari log akses; endpoint lain tetap tercatat."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            return "/health" not in record.getMessage()
+        except Exception:
+            return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietHealthFilter())
 
 _STARTED_AT = time.time()
 _LOCK = threading.Lock()

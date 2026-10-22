@@ -8,5 +8,7 @@
   "use_venv": true,
   "auto_update": true,
   "autostart": true,
-  "open_dashboard": false
+  "open_dashboard": false,
+  "data_source": "auto",
+  "local_root": "C:\\KERJA\\1. RESTO\\9.NEW QUERY"
 }
