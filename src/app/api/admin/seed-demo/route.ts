@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { commitRun, processRun } from "@/lib/snapshot-service";
+import { commitStep, processRun, type CommitStepResult } from "@/lib/snapshot-service";
 import { currentPeriodKeyJakarta, prevPeriodKey } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +32,15 @@ export async function POST() {
         ambangAcrPct: 80,
         bundleName: `Demo ${periodKey}`,
       });
-      const out = await commitRun(runBatchId);
+      // Task 54: komit bertahap — loop sampai done (demo 12rb baris lazimnya
+      // selesai dalam 1–2 langkah; cursor aman diulang bila ada hambatan).
+      let step = await commitStep(runBatchId);
+      let guard = 0;
+      while (!step.done) {
+        if (++guard > 20) throw new Error("Komit demo tidak konvergen (20 langkah).");
+        step = (await commitStep(runBatchId)) as CommitStepResult;
+      }
+      const out = step;
       created.push({ periodKey: out.periodKey, snapshotId: out.snapshotId, rowCount: out.rowCount });
     }
   } catch (err) {

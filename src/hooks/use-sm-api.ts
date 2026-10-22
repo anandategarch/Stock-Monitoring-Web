@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
-  AuditLogDto, BundleManifest, CreateCaseRequest, DrilldownResponse, DriveFolderLinkDto, DqIssueDto, EngineHealth,
+  AuditLogDto, BundleManifest, CommitStepProgress, CreateCaseRequest, DrilldownResponse, DriveFolderLinkDto, DqIssueDto, EngineHealth,
   FollowUpCaseDto, FollowUpEventDto, IngestCommitResponse, IngestProcessResponse,
   LaporanResponse, NominalResponse, OutletPICDto, OverviewResponse, PivotResponse,
   PoResponse, RunDetail, RunSummary, SelisihInResponse, SettingsDto, SnapshotSummary,
@@ -333,17 +333,42 @@ export function useIngestUpload() {
 export function useIngestCommit() {
   const invalidateAll = useInvalidateAll();
   return useMutation({
-    mutationFn: (body: { runBatchId: string }) =>
-      fetchJson<IngestCommitResponse>("/api/ingest/commit", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
+    // Task 54 — komit bertahap resumable: loop panggil /api/ingest/commit
+    // sampai done. Tiap langkah ±30 dtk kerja server; cursor tersimpan di
+    // server, jadi langkah yang terputus (timeout/koneksi) aman diteruskan.
+    mutationFn: async (vars: {
+      runBatchId: string;
+      onProgress?: (p: CommitStepProgress) => void;
+    }) => {
+      const call = () =>
+        fetchJson<IngestCommitResponse | CommitStepProgress>("/api/ingest/commit", {
+          method: "POST",
+          body: JSON.stringify({ runBatchId: vars.runBatchId }),
+        });
+      let res = await call();
+      let failures = 0;
+      while (!res.done) {
+        vars.onProgress?.(res);
+        try {
+          res = await call();
+          failures = 0;
+        } catch (err) {
+          // Langkah terputus — komit melanjutkan dari cursor saat dicoba lagi.
+          // 3 kali gagal beruntun → berhenti jujur (toast error).
+          if (++failures >= 3) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+      }
+      return res;
+    },
     onSuccess: (out) => {
       toast.success(
         `Snapshot ${out.periodKey} terkomit (${out.rowCount.toLocaleString("id-ID")} baris)${out.supersededPrevious ? " — periode lama ditandai SUPERSEDED" : ""}.`,
       );
       invalidateAll();
     },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : "Gagal mengkomit snapshot."),
   });
 }
 

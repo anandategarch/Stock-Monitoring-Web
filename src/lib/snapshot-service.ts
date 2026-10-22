@@ -189,24 +189,66 @@ function mapRows(result: EngineResult, snapshotId: string) {
 }
 
 /**
- * Langkah 2: KOMIT — dapatkan hasil run, tulis snapshot permanen. Periode lama
- * ACTIVE → SUPERSEDED. Kegagalan di tengah → snapshot dibersihkan, data lama
- * tak tersentuh (NFR-3).
+ * Langkah 2: KOMIT — tulis snapshot permanen atas hasil run. Periode lama
+ * ACTIVE → SUPERSEDED. Kegagalan di tengah → data lama tak tersentuh (NFR-3).
  * Dua sumber hasil (Task 51):
  *  - run biasa        → panggil ulang engine (FR-12 idempotent → identik).
  *  - run agent laptop  → hasil EngineResult tersimpan (gzip+b64 di AgentResult)
  *                        DIPAKAI APA ADANYA — serverless Vercel tidak punya
  *                        engine; engine deterministik → hasil tersimpan =
  *                        output kanonik run itu (FR-12 tetap jujur).
+ *
+ * Task 54 — KOMIT BERTAHAP (resumable): menulis ±88rb baris snapshot ke DB
+ * remote dalam SATU panggilan serverless TERBUKTI >60 dtk (FUNCTION_INVOCATION_
+ * TIMEOUT dua kali di produksi; snapshot BUILDING yatim). Kini komit dipecah:
+ *  - pemanggil (browser / seed-demo) memanggil commitStep() BERULANG sampai
+ *    done; tiap langkah bekerja maks ±30 dtk — jauh di bawah 60 dtk.
+ *  - TAHAP + CURSOR tersimpan di snapshot.paramsJson (tanpa ubah schema DB);
+ *    langkah berikutnya melanjutkan dari cursor — komit yang terputus dimanapun
+ *    (tab tertutup, koneksi putus, timeout) cukup ditekan Komit ulang.
+ *  - cursor maju lewat compare-and-set paramsJson (updateMany WHERE paramsJson
+ *    = nilai lama) — dua langkah paralel tidak bisa menggandakan potongan sama.
+ *  - tiap potongan baris = SATU createMany = SATU statement INSERT = atomik;
+ *    kegagalan di tengah tidak menyisakan setengah potongan.
+ *  - harga (unique runBatchId+item+satuan) & selisih (unique snapshot+resto)
+ *    ditulis skipDuplicates → aman diulang; PO idempoten lewat unique
+ *    (snapshotId, poNumber) + item hanya ditulis bila header masih kosong.
+ *  - sebelum promosi ACTIVE: jumlah baris/selisih/PO DIVERIFIKASI = ringkasan
+ *    run — build rusak ditolak jujur (hapus BUILDING di Konfigurasi, komit
+ *    ulang), tidak pernah aktif diam-diam.
  */
-export async function commitRun(runBatchId: string): Promise<{
-  snapshotId: string;
-  periodKey: string;
-  rowCount: number;
-  supersededPrevious: boolean;
-  definitionVersion: string;
-}> {
-  const run = await db.runBatch.findUnique({ where: { id: runBatchId } });
+export type CommitPhase = "rows" | "prices" | "selisih" | "po" | "finalize";
+
+export type CommitStepResult =
+  | { done: false; phase: CommitPhase; written: number; total: number }
+  | {
+      done: true; snapshotId: string; periodKey: string; rowCount: number;
+      supersededPrevious: boolean; definitionVersion: string;
+    };
+
+const COMMIT_PHASES: CommitPhase[] = ["rows", "prices", "selisih", "po", "finalize"];
+
+/** Cache hasil run per-instance lambda: langkah-langkah komit memakai instance
+ *  hangat yang sama — baca AgentResult 5–15 MB / panggil ulang engine cukup
+ *  sekali per instance, bukan sekali per langkah. TTL 10 menit. */
+const commitResultCacheHolder = globalThis as unknown as {
+  __smCommitResultCache?: Map<string, { result: EngineResult; expires: number }>;
+};
+const commitResultCache =
+  commitResultCacheHolder.__smCommitResultCache ?? new Map<string, { result: EngineResult; expires: number }>();
+commitResultCacheHolder.__smCommitResultCache = commitResultCache;
+
+function buildParamsJson(tanggalH: number, ambangAcrPct: number, phase: CommitPhase, cursor: number) {
+  // Bentuk kanonik (urutan kunci tetap) — dipakai sebagai nilai compare-and-set.
+  return JSON.stringify({ tanggalH, ambangAcrPct, buildPhase: phase, buildCursor: cursor });
+}
+
+/** Satu langkah komit. Panggil berulang (dari route yang sama) sampai done. */
+export async function commitStep(runBatchId: string, budgetMs = 30_000): Promise<CommitStepResult> {
+  const run = await db.runBatch.findUnique({
+    where: { id: runBatchId },
+    include: { snapshot: true },
+  });
   if (!run) throw new Error("Run tidak ditemukan.");
   if (run.committedAt) throw new Error("Run ini sudah dikomit sebelumnya.");
 
@@ -226,151 +268,233 @@ export async function commitRun(runBatchId: string): Promise<{
   const bundleId = typeof parsed.bundleId === "string" ? parsed.bundleId : null;
   const isAgentRun = parsed.engineSource === "agent";
 
-  let result: EngineResult;
-  if (isAgentRun) {
-    const stored = await readAgentResult(run.id);
-    if (!stored) {
-      throw new Error(
-        "Hasil run agent tidak tersimpan di server — jalankan ulang job agent (atau proses ulang run ini dari instalasi lokal).",
+  // ---- Hasil run (cache per-instance, lihat commitResultCache) ----
+  const cached = commitResultCache.get(run.id);
+  if (cached && cached.expires <= Date.now()) commitResultCache.delete(run.id);
+  let result: EngineResult | undefined =
+    cached && cached.expires > Date.now() ? cached.result : undefined;
+  if (!result) {
+    if (isAgentRun) {
+      const stored = await readAgentResult(run.id);
+      if (!stored) {
+        throw new Error(
+          "Hasil run agent tidak tersimpan di server — jalankan ulang job agent (atau proses ulang run ini dari instalasi lokal).",
+        );
+      }
+      result = stored;
+    } else {
+      result = await engineProcess(
+        {
+          periodKey: params.periodKey,
+          tanggalH: params.tanggalH,
+          ambangAcrPct: params.ambangAcrPct,
+          bundleName: params.bundleName ?? undefined,
+          seed: params.seed ?? 0,
+          ...(bundleId ? { bundlePath: await resolveBundlePath(bundleId) } : {}),
+        },
+        bundleId ? ENGINE_PROD_URL : undefined,
       );
     }
-    result = stored;
-  } else {
-    result = await engineProcess(
-      {
-        periodKey: params.periodKey,
-        tanggalH: params.tanggalH,
-        ambangAcrPct: params.ambangAcrPct,
-        bundleName: params.bundleName ?? undefined,
-        seed: params.seed ?? 0,
-        ...(bundleId ? { bundlePath: await resolveBundlePath(bundleId) } : {}),
-      },
-      bundleId ? ENGINE_PROD_URL : undefined,
+    commitResultCache.set(run.id, { result, expires: Date.now() + 10 * 60_000 });
+  }
+
+  // ---- Snapshot BUILDING: LANJUTKAN dari cursor, atau mulai bersih ----
+  let snapshot = run.snapshot;
+  const buildState = snapshot
+    ? parseJsonSafe<{ buildPhase?: unknown; buildCursor?: unknown }>(snapshot.paramsJson, {})
+    : {};
+  const resumable =
+    snapshot !== null &&
+    snapshot.state === "BUILDING" &&
+    typeof buildState.buildPhase === "string" &&
+    COMMIT_PHASES.includes(buildState.buildPhase as CommitPhase) &&
+    typeof buildState.buildCursor === "number";
+  if (snapshot && snapshot.state !== "BUILDING") {
+    // Hanya mungkin bila promosi setengah jalan (seharusnya transaksi atomik).
+    throw new Error(
+      `Snapshot run ini berstatus ${snapshot.state} tapi run belum tercatat komit — segarkan halaman, cek tab Konfigurasi.`,
     );
   }
+  if (snapshot && !resumable) {
+    // BUILDING yatim kode LAMA (komit sekali-jalan tanpa cursor — terbukti ada
+    // di produksi) tidak bisa dilanjutkan dengan aman → bersihkan, mulai baru.
+    await db.periodSnapshot.delete({ where: { id: snapshot.id } }).catch(() => undefined);
+    await db.priceHistory.deleteMany({ where: { runBatchId: run.id } }).catch(() => undefined);
+    snapshot = null;
+  }
+  if (!snapshot) {
+    // Pra-bersih BUILDING yatim lain dari run yang sama (menahan unique runBatchId).
+    await db.periodSnapshot.deleteMany({
+      where: { runBatchId: run.id, state: "BUILDING" },
+    });
+    await db.priceHistory.deleteMany({ where: { runBatchId: run.id } });
+    try {
+      snapshot = await db.periodSnapshot.create({
+        data: {
+          periodKey: run.periodKey,
+          runBatchId: run.id,
+          state: "BUILDING",
+          restoCount: result.summary.restoCount,
+          itemCount: result.summary.itemCount,
+          rowCount: result.summary.rowCount,
+          dayCount: result.summary.dayCount,
+          nominalTotal: result.summary.nominalTotal,
+          deviasiQtyTotal: result.summary.deviasiQtyTotal,
+          definitionVersion: result.definitionVersion,
+          paramsJson: buildParamsJson(params.tanggalH, params.ambangAcrPct, "rows", 0),
+          committedBy: ACTOR,
+        },
+      });
+    } catch (err) {
+      if (isP2002(err)) {
+        throw new Error("Run ini sedang dikomit di permintaan lain — tunggu sebentar lalu cek lagi.");
+      }
+      throw err;
+    }
+  }
+  const snap = snapshot;
+  let phase: CommitPhase = resumable ? (buildState.buildPhase as CommitPhase) : "rows";
+  let cursor: number = resumable ? (buildState.buildCursor as number) : 0;
+  let paramsJsonNow = snap.paramsJson;
+
+  // Compare-and-set tahap+cursor: hanya maju bila paramsJson belum berubah.
+  const cas = async (nextPhase: CommitPhase, nextCursor: number): Promise<boolean> => {
+    const nextJson = buildParamsJson(params.tanggalH, params.ambangAcrPct, nextPhase, nextCursor);
+    const res = await db.periodSnapshot.updateMany({
+      where: { id: snap.id, paramsJson: paramsJsonNow },
+      data: { paramsJson: nextJson },
+    });
+    if (res.count !== 1) return false; // langkah lain sudah maju — baca ulang nanti
+    paramsJsonNow = nextJson;
+    phase = nextPhase;
+    cursor = nextCursor;
+    return true;
+  };
 
   const summary = result.summary;
+  const t0 = Date.now();
+  const rows = phase === "rows" ? mapRows(result, snap.id) : [];
 
-  // Buat snapshot dulu dalam state BUILDING (belum terlihat), isi semua data,
-  // baru promosikan ACTIVE. Gagal di tengah → hapus (cascade) + lempar error.
-  // Pra-bersih BUILDING yatim dari komit yang gagal sebelumnya (audit 48-g-data):
-  // tanpa ini, snapshot BUILDING tua menahan unique(runBatchId) selamanya.
-  await db.periodSnapshot.deleteMany({
-    where: { runBatchId: run.id, state: "BUILDING" },
-  });
-
-  let snapshot;
-  try {
-    snapshot = await db.periodSnapshot.create({
-      data: {
-        periodKey: run.periodKey,
-        runBatchId: run.id,
-        state: "BUILDING",
-        restoCount: summary.restoCount,
-        itemCount: summary.itemCount,
-        rowCount: summary.rowCount,
-        dayCount: summary.dayCount,
-        nominalTotal: summary.nominalTotal,
-        deviasiQtyTotal: summary.deviasiQtyTotal,
-        definitionVersion: result.definitionVersion,
-        paramsJson: JSON.stringify({ tanggalH: params.tanggalH, ambangAcrPct: params.ambangAcrPct }),
-        committedBy: ACTOR,
-      },
-    });
-  } catch (err) {
-    if (isP2002(err)) {
-      throw new Error("Run ini sedang dikomit di permintaan lain — tunggu sebentar lalu cek lagi.");
+  while (Date.now() - t0 < budgetMs) {
+    if (phase === "rows") {
+      if (cursor >= rows.length) {
+        if (!(await cas("prices", 0))) break;
+        continue;
+      }
+      // 2000×25 kolom = 50.000 parameter < batas protokol Postgres 65.535.
+      const slice = rows.slice(cursor, cursor + 2000);
+      await db.snapshotRow.createMany({ data: slice });
+      if (!(await cas("rows", cursor + slice.length))) break;
+      continue;
     }
-    throw err;
-  }
-
-  try {
-    const rows = mapRows(result, snapshot.id);
-    // Task 54: chunk 2000 (bukan 500) — komit 88rb baris dulu butuh 177 kali
-    // bolak-balik Supabase ≈ >60 dtk → fungsi Vercel dibunuh di tengah dan
-    // snapshot BUILDING yatim tertinggal. 2000×25 kolom = 50.000 parameter <
-    // batas protokol Postgres 65.535 — aman; 88rb baris kini ±45 panggilan.
-    for (let i = 0; i < rows.length; i += 2000) {
-      await db.snapshotRow.createMany({ data: rows.slice(i, i + 2000) });
-    }
-
-    if (result.prices.length > 0) {
-      await db.priceHistory.createMany({
-        data: result.prices.map((p) => ({
-          runBatchId: run.id,
-          itemName: p.itemName,
-          satuan: p.satuan,
-          harga: p.harga,
-          rasioKonversi: p.rasioKonversi,
-          konversiOk: p.konversiOk,
-          alasan: p.alasan ?? null,
-        })),
-      });
-    }
-
-    if (result.selisihIn.length > 0) {
-      await db.selisihInResto.createMany({
-        data: result.selisihIn.map((s) => ({
-          snapshotId: snapshot.id,
-          restoCode: s.restoCode,
-          restoName: s.restoName,
-          inAccurate: s.inAccurate,
-          barangMasuk: s.barangMasuk,
-          selisih: s.selisih,
-          hasilAudit: s.hasilAudit,
-          skorResto: s.skorResto,
-          itemBerselisih: s.itemBerselisih,
-          tanggalTerdampak: s.tanggalTerdampak,
-        })),
-      });
-    }
-
-    // Task 54: PO header dulu beruntun (77 PO = 154 panggilan kecil). Kini antre
-    // dengan 8 pekerja paralel (pool Supabase aman); tiap pekerja membuat
-    // header lalu item-nya — urutan dalam satu PO tetap terjaga.
-    const poQueue = [...result.po];
-    const poWorkers = Array.from(
-      { length: Math.min(8, poQueue.length) },
-      async () => {
-        for (;;) {
-          const po = poQueue.shift();
-          if (!po) return;
-          const header = await db.poHeader.create({
-            data: {
-              snapshotId: snapshot.id,
-              cabang: po.cabang,
-              restoName: po.restoName,
-              poNumber: po.poNumber,
-              tanggal: po.tanggal,
-              supplier: po.supplier,
-              itemCount: po.itemCount,
-              status: po.status,
-              statusPesanan: po.statusPesanan,
-              annotasi: po.annotasi ?? null,
-            },
+    if (phase === "prices") {
+      if (result.prices.length > 0) {
+        // Idempoten tanpa skipDuplicates (tak didukung SQLite): satu createMany
+        // = satu statement atomik; P2002 = fase ini sempat tuntas sebelumnya.
+        try {
+          await db.priceHistory.createMany({
+            data: result.prices.map((p) => ({
+              runBatchId: run.id,
+              itemName: p.itemName,
+              satuan: p.satuan,
+              harga: p.harga,
+              rasioKonversi: p.rasioKonversi,
+              konversiOk: p.konversiOk,
+              alasan: p.alasan ?? null,
+            })),
           });
-          if (po.items.length > 0) {
-            await db.poItem.createMany({
-              data: po.items.map((it) => ({
-                poHeaderId: header.id,
-                itemName: it.itemName,
-                qty: it.qty,
-                satuan: it.satuan,
-                status: it.status,
-                diterimaSebagian: it.diterimaSebagian,
-              })),
-            });
-          }
+        } catch (err) {
+          if (!isP2002(err)) throw err;
         }
-      },
-    );
-    await Promise.all(poWorkers);
+      }
+      if (!(await cas("selisih", 0))) break;
+      continue;
+    }
+    if (phase === "selisih") {
+      if (result.selisihIn.length > 0) {
+        // Idempoten — sama seperti fase harga (unique snapshotId+restoCode).
+        try {
+          await db.selisihInResto.createMany({
+            data: result.selisihIn.map((s) => ({
+              snapshotId: snap.id,
+              restoCode: s.restoCode,
+              restoName: s.restoName,
+              inAccurate: s.inAccurate,
+              barangMasuk: s.barangMasuk,
+              selisih: s.selisih,
+              hasilAudit: s.hasilAudit,
+              skorResto: s.skorResto,
+              itemBerselisih: s.itemBerselisih,
+              tanggalTerdampak: s.tanggalTerdampak,
+            })),
+          });
+        } catch (err) {
+          if (!isP2002(err)) throw err;
+        }
+      }
+      if (!(await cas("po", 0))) break;
+      continue;
+    }
+    if (phase === "po") {
+      if (cursor >= result.po.length) {
+        if (!(await cas("finalize", 0))) break;
+        continue;
+      }
+      // Idempoten: header unik (snapshotId, poNumber); items satu createMany
+      // atomik — hanya ditulis bila header masih kosong (lanjut ulang aman).
+      const po = result.po[cursor];
+      let header = await db.poHeader.findUnique({
+        where: { snapshotId_poNumber: { snapshotId: snap.id, poNumber: po.poNumber } },
+      });
+      if (!header) {
+        header = await db.poHeader.create({
+          data: {
+            snapshotId: snap.id,
+            cabang: po.cabang,
+            restoName: po.restoName,
+            poNumber: po.poNumber,
+            tanggal: po.tanggal,
+            supplier: po.supplier,
+            itemCount: po.itemCount,
+            status: po.status,
+            statusPesanan: po.statusPesanan,
+            annotasi: po.annotasi ?? null,
+          },
+        });
+      }
+      const existingItems = await db.poItem.count({ where: { poHeaderId: header.id } });
+      if (po.items.length > 0 && existingItems === 0) {
+        await db.poItem.createMany({
+          data: po.items.map((it) => ({
+            poHeaderId: header.id,
+            itemName: it.itemName,
+            qty: it.qty,
+            satuan: it.satuan,
+            status: it.status,
+            diterimaSebagian: it.diterimaSebagian,
+          })),
+        });
+      }
+      if (!(await cas("po", cursor + 1))) break;
+      continue;
+    }
+    // phase === "finalize"
+    const rowCount = await db.snapshotRow.count({ where: { snapshotId: snap.id } });
+    const selisihCount = await db.selisihInResto.count({ where: { snapshotId: snap.id } });
+    const poCount = await db.poHeader.count({ where: { snapshotId: snap.id } });
+    if (
+      rowCount !== summary.rowCount ||
+      selisihCount !== result.selisihIn.length ||
+      poCount !== result.po.length
+    ) {
+      throw new Error(
+        `Snapshot build tidak utuh (baris ${rowCount}/${summary.rowCount} · selisih ${selisihCount}/${result.selisihIn.length} · PO ${poCount}/${result.po.length}) — hapus snapshot BUILDING ini di tab Konfigurasi, lalu tekan Komit ulang. Data lama tidak tersentuh (NFR-3).`,
+      );
+    }
+    await db.dQIssue.updateMany({ where: { runBatchId: run.id }, data: { snapshotId: snap.id } });
 
-    // Tautkan DQ issue run ini ke snapshot. Promosi ACTIVE + supersede periode
-    // lama + committedAt DIBUNGKUS SATU TRANSAKSI (audit 48-g-data): komit ganda
-    // konkuren dicek ulang DI DALAM transaksi — tak mungkin ada dua ACTIVE.
-    await db.dQIssue.updateMany({ where: { runBatchId: run.id }, data: { snapshotId: snapshot.id } });
-
+    // Promosi ACTIVE + supersede periode lama + committedAt + paramsJson bersih
+    // (buang buildPhase/buildCursor) — SATU TRANSAKSI (audit 48-g-data).
     const supersededList = await db.$transaction(async (tx) => {
       const cur = await tx.runBatch.findUnique({
         where: { id: run.id },
@@ -380,42 +504,52 @@ export async function commitRun(runBatchId: string): Promise<{
         throw new Error("Run ini sudah dikomit sebelumnya.");
       }
       const toSupersede = await tx.periodSnapshot.findMany({
-        where: { periodKey: snapshot.periodKey, state: "ACTIVE", id: { not: snapshot.id } },
+        where: { periodKey: snap.periodKey, state: "ACTIVE", id: { not: snap.id } },
         select: { id: true },
       });
       if (toSupersede.length > 0) {
         await tx.periodSnapshot.updateMany({
           where: { id: { in: toSupersede.map((s) => s.id) } },
-          data: { state: "SUPERSEDED", supersededAt: new Date(), supersededById: snapshot.id },
+          data: { state: "SUPERSEDED", supersededAt: new Date(), supersededById: snap.id },
         });
       }
-      await tx.periodSnapshot.update({ where: { id: snapshot.id }, data: { state: "ACTIVE" } });
+      await tx.periodSnapshot.update({
+        where: { id: snap.id },
+        data: {
+          state: "ACTIVE",
+          paramsJson: JSON.stringify({ tanggalH: params.tanggalH, ambangAcrPct: params.ambangAcrPct }),
+        },
+      });
       await tx.runBatch.update({ where: { id: run.id }, data: { committedAt: new Date() } });
       return toSupersede;
     });
 
-    await audit("SNAPSHOT_COMMIT", "PeriodSnapshot", snapshot.id, {
-      periodKey: snapshot.periodKey,
+    await audit("SNAPSHOT_COMMIT", "PeriodSnapshot", snap.id, {
+      periodKey: snap.periodKey,
       rowCount: summary.rowCount,
       definitionVersion: result.definitionVersion,
       superseded: supersededList.length,
     });
+    commitResultCache.delete(run.id);
 
     return {
-      snapshotId: snapshot.id,
-      periodKey: snapshot.periodKey,
+      done: true,
+      snapshotId: snap.id,
+      periodKey: snap.periodKey,
       rowCount: summary.rowCount,
       supersededPrevious: supersededList.length > 0,
       definitionVersion: result.definitionVersion,
     };
-  } catch (err) {
-    // NFR-3: kegagalan tidak boleh menyisakan snapshot setengah jadi.
-    // PriceHistory di-key runBatchId (bukan snapshotId, tak ikut cascade) —
-    // bersihkan juga, else komit ulang run yang sama P2002 selamanya (audit 48-g-data).
-    await db.periodSnapshot.delete({ where: { id: snapshot.id } }).catch(() => undefined);
-    await db.priceHistory.deleteMany({ where: { runBatchId: run.id } }).catch(() => undefined);
-    throw err;
   }
+
+  // Anggaran waktu habis (atau CAS kalah dari langkah paralel) — client
+  // memanggil langkah berikutnya; cursor sudah tersimpan di paramsJson.
+  return {
+    done: false,
+    phase,
+    written: cursor,
+    total: phase === "rows" ? rows.length : phase === "po" ? result.po.length : 0,
+  };
 }
 
 /** Snapshot ACTIVE terbaru (periode paling akhir). */

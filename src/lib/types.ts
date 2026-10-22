@@ -408,11 +408,21 @@ export interface AgentStatusDto {
 }
 
 export interface IngestCommitResponse {
+  done: true;
   snapshotId: string;
   periodKey: string;
   rowCount: number;
   supersededPrevious: boolean;
   definitionVersion: string;
+}
+
+/** Satu langkah komit yang belum selesai (Task 54 — komit bertahap resumable):
+ *  client memanggil /api/ingest/commit berulang sampai done. */
+export interface CommitStepProgress {
+  done: false;
+  phase: "rows" | "prices" | "selisih" | "po" | "finalize";
+  written: number;
+  total: number;
 }
 
 export interface PivotRow {

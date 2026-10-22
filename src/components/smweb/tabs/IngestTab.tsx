@@ -63,6 +63,8 @@ export function IngestTab() {
   const [bundleName, setBundleName] = useState("");
   const [manifest, setManifest] = useState<BundleManifest | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // Label kemajuan komit bertahap (Task 54) — dipakai di tombol Komit Snapshot.
+  const [commitStage, setCommitStage] = useState<string | null>(null);
   const [folderStage, setFolderStage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -367,7 +369,25 @@ export function IngestTab() {
 
   const onCommit = () => {
     if (!selectedRunId) return;
-    commit.mutate({ runBatchId: selectedRunId });
+    // Task 54: komit bertahap resumable — kemajuan langkah tampil di tombol;
+    // bila terputus di tengah, tekan Komit ulang: cursor tersimpan di server
+    // dan komit melanjutkan sendiri dari tempat terakhir.
+    commit.mutate(
+      {
+        runBatchId: selectedRunId,
+        onProgress: (p) =>
+          setCommitStage(
+            p.phase === "rows"
+              ? `Mengkomit… baris ${fmtInt(p.written)} / ${fmtInt(p.total)}`
+              : p.phase === "po"
+                ? `Mengkomit… PO ${p.written} / ${fmtInt(p.total)}`
+                : p.phase === "finalize"
+                  ? "Memverifikasi & mengaktifkan…"
+                  : `Mengkomit… tahap ${p.phase}`,
+          ),
+      },
+      { onSettled: () => setCommitStage(null) },
+    );
   };
 
   const existingPeriodKeys = new Set(
@@ -1111,7 +1131,7 @@ export function IngestTab() {
                   >
                     {commit.isPending ? (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Mengkomit…
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> {commitStage ?? "Mengkomit…"}
                       </>
                     ) : (
                       <>

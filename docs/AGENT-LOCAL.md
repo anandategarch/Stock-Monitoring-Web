@@ -29,11 +29,14 @@ Tidak ada tombol rahasia — seluruh alurnya hanya 5 langkah:
    Follow-Up, Laporan) dan pilih periodenya. Selesai. Bulan berikutnya: ulangi
    langkah 1–5 dengan periode baru.
 
-> **Komit run besar (±88 ribu baris):** penulisan snapshot ke database sudah
-> dioptimalkan (chunk 2.000 baris + PO paralel, Task 54) supaya muat batas
-> 60 dtk fungsi serverless. Bila komit terputus di tengah (listrik/internet),
-> snapshot setengah jadi tampil sebagai **BUILDING (komit terputus)** di tab
-> Konfigurasi — setelah ±15 menit bisa dihapus, lalu tekan **Komit** ulang;
+> **Komit run besar (±88 ribu baris):** komit dipecah jadi langkah-langkah
+> singkat yang **bisa dilanjutkan** (Task 54) — tiap langkah menulis sepotong
+> data lalu menyimpan posisinya; browser otomatis memanggil lanjutan sampai
+> selesai, dengan kemajuan tampil di tombol Komit (baris 12.000 / 88.031 …).
+> Komit yang terputus di tengah (listrik/internet/tab tertutup) **cukup ditekan
+> Komit ulang** — ia melanjutkan dari posisi terakhir, tidak mengulang dari nol.
+> Sisa build yang rusak tampil sebagai **BUILDING (komit terputus)** di tab
+> Konfigurasi — setelah ±15 menit bisa dihapus bila mau mulai bersih;
 > data lama tidak pernah tersentuh (NFR-3).
 >
 > **Membersihkan riwayat:** tombol 🗑 per baris run di *Riwayat run* (run demo /
