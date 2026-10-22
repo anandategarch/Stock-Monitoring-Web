@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
-  AuditLogDto, BundleManifest, CommitStepProgress, CreateCaseRequest, DrilldownResponse, DriveFolderLinkDto, DqIssueDto, EngineHealth,
+  AuditLogDto, CommitStepProgress, CreateCaseRequest, DrilldownResponse, DqIssueDto, EngineHealth,
   FollowUpCaseDto, FollowUpEventDto, IngestCommitResponse, IngestProcessResponse,
   LaporanResponse, NominalResponse, OutletPICDto, OverviewResponse, PivotResponse,
   PoResponse, RunDetail, RunSummary, SelisihInResponse, SettingsDto, SnapshotSummary,
@@ -34,7 +34,6 @@ export const qk = {
   settings: ["settings"] as const,
   engineHealth: ["engine-health"] as const,
   audit: (limit: number) => ["audit", limit] as const,
-  driveLinks: ["drive-links"] as const,
   agentStatus: ["agent-status"] as const,
   agentJob: (id: string) => ["agent-job", id] as const,
 };
@@ -236,7 +235,6 @@ export function useIngestProcess() {
   return useMutation({
     mutationFn: (body: {
       periodKey: string; tanggalH?: number; ambangAcrPct?: number; bundleName?: string;
-      mode?: "demo" | "bundle"; bundleId?: string;
     }) =>
       fetchJson<IngestProcessResponse>("/api/ingest/process", {
         method: "POST",
@@ -246,89 +244,9 @@ export function useIngestProcess() {
   });
 }
 
-// ---------- Google Drive (FR-1: tarik tanpa ZIP manual) ----------
-
-/** Daftar link folder Drive tersimpan — "biar ingat". */
-export function useDriveLinks() {
-  return useQuery({
-    queryKey: qk.driveLinks,
-    queryFn: () => fetchJson<{ links: DriveFolderLinkDto[] }>("/api/ingest/drive"),
-  });
-}
-
-/** Simpan + cek link folder Drive (listing langsung oleh server). */
-export function useDriveSaveLink() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (url: string) =>
-      fetchJson<{ link: DriveFolderLinkDto; created: boolean; warnings: string[] }>(
-        "/api/ingest/drive",
-        { method: "POST", body: JSON.stringify({ action: "save", url }) },
-      ),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.driveLinks }),
-  });
-}
-
-/** Tarik file Excel dari link tersimpan → bundle (respons = manifest, sama
- *  dengan unggah ZIP — alur pratinjau/komit lanjutan identik).
- *  action "preview" = PRATINJAU CEPAT: listing Drive saja tanpa unduh —
- *  bebas kuota disk/durasi serverless (manifest.previewOnly = true). */
-export function useDrivePull() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: { ids?: string[]; url?: string; action?: "process" | "preview" }) =>
-      fetchJson<BundleManifest>("/api/ingest/drive", {
-        method: "POST",
-        body: JSON.stringify({ action: vars.action ?? "process", ids: vars.ids, url: vars.url }),
-      }),
-    onSuccess: () => {
-      // Segarkan "terakhir ditarik"/totalBytes/badge di daftar link (audit 48-g-ui).
-      void qc.invalidateQueries({ queryKey: qk.driveLinks });
-    },
-  });
-}
-
-/** Hapus link tersimpan (file di Drive tidak tersentuh). */
-export function useDriveDeleteLink() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) =>
-      fetchJson<{ ok: boolean; id: string }>(`/api/ingest/drive?id=${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      }),
-    onSuccess: () => {
-      toast.success("Link Drive dihapus.");
-      void qc.invalidateQueries({ queryKey: qk.driveLinks });
-    },
-  });
-}
-
-/** FR-1 — unggah ZIP bundle export Accurate; multipart (bukan JSON) sehingga
- * memakai fetch langsung di titik integrasi hooks ini (fetchJson memaksa
- * Content-Type application/json). */
-export function useIngestUpload() {
-  return useMutation({
-    mutationFn: async (file: File) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/ingest/upload", { method: "POST", body: fd });
-      let body: unknown = null;
-      try {
-        body = await res.json();
-      } catch {
-        body = null;
-      }
-      if (!res.ok) {
-        const msg =
-          body && typeof body === "object" && "error" in body
-            ? String((body as { error: unknown }).error)
-            : `Unggah gagal (HTTP ${res.status}).`;
-        throw new Error(msg);
-      }
-      return body as BundleManifest;
-    },
-  });
-}
+// Task 55: hooks Google Drive (useDriveLinks/SaveLink/Pull/DeleteLink) dan
+// useIngestUpload (ZIP/folder ke server) DIHAPUS — fitur import Drive &
+// unggah bundle server-side sudah tidak ada. Produksi lewat agent laptop.
 
 export function useIngestCommit() {
   const invalidateAll = useInvalidateAll();
@@ -519,13 +437,14 @@ export function useAgentJob(id: string | null) {
   });
 }
 
-/** Buat job: agent laptop yang akan menarik file Drive + memproses via
- *  engine FastAPI lokal, lalu mengunggah hasil — web tinggal menampilkan. */
+/** Buat job: agent laptop menyalin FOLDER KANONIK dari disk lokal (RootPath)
+ *  + memproses via engine FastAPI lokal, lalu mengunggah hasil — web tinggal
+ *  menampilkan. Task 55: `folders` = daftar folderKey config.json. */
 export function useAgentCreateJob() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: {
-      ids: string[]; periodKey: string; tanggalH: number; ambangAcrPct: number; bundleName?: string;
+      folders: string[]; periodKey: string; tanggalH: number; ambangAcrPct: number; bundleName?: string;
     }) =>
       fetchJson<{ job: AgentJobDto }>("/api/agent", {
         method: "POST",

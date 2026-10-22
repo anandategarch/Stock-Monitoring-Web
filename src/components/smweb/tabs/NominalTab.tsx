@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/smweb/empty-state";
 import { StatCard } from "@/components/smweb/stat-card";
+import { ExportButton } from "@/components/smweb/export-button";
 
 const DRILLDOWN_HINT = "Drill-down per barang tersedia di tab Deviasi";
 
@@ -94,7 +95,12 @@ export default function NominalTab({ snapshotId }: { snapshotId: string | null }
             dari snapshot database, bukan file eksternal (FR-34).
           </p>
         </div>
-        <Badge variant="secondary">Periode: {periodLabel(data.periodKey)}</Badge>
+        <div className="flex items-center gap-2">
+          {snapshotId ? (
+            <ExportButton snapshotId={snapshotId} sheet="nominal" size="sm" label="Export Nominal" />
+          ) : null}
+          <Badge variant="secondary">Periode: {periodLabel(data.periodKey)}</Badge>
+        </div>
       </div>
 
       {/* KPI */}

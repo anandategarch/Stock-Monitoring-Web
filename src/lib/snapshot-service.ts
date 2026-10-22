@@ -3,11 +3,13 @@
 // Strategi komit: engine IDEMPOTENT → komit memanggil ulang /process dengan
 // parameter run yang sama, hasil identik, lalu menulis snapshot permanen.
 // Snapshot immutable: periode lama → SUPERSEDED (tetap tersimpan).
+// Task 55: jalur bundle server-side (unggah ZIP/Drive → engine :3031 di server)
+// DIHAPUS — data asli kini HANYA lewat agent laptop (disk lokal) atau engine
+// demo sintetis. Komit run agent memakai AgentResult tersimpan (tanpa engine).
 // ============================================================
 import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
-import { engineProcess, ENGINE_PROD_URL } from "@/lib/engine";
-import { resolveBundlePath } from "@/lib/bundles";
+import { engineProcess } from "@/lib/engine";
 import { readAgentResult, saveAgentResult } from "@/lib/agent-store";
 import { stableFingerprint } from "@/lib/fingerprint";
 import { prevPeriodKey } from "@/lib/format";
@@ -35,9 +37,6 @@ export interface RunParams {
   ambangAcrPct: number;
   bundleName: string | null;
   seed?: number;
-  /** Mode produksi (FR-1/FR-10): id bundle terunggah — dipakai komit ulang
-   *  (FR-12 idempotent: bundleId sama → bundlePath sama → hasil identik). */
-  bundleId?: string | null;
 }
 
 const ACTOR = "analyst";
@@ -55,10 +54,10 @@ async function audit(action: string, entity: string, entityId: string | null, de
 }
 
 /** Langkah 1: jalankan engine, simpan RunBatch + DQ + manifest + log (BELUM komit).
- * Demo (tanpa bundleId) → engine demo :3030 · bundleId terisi → engine PRODUKSI :3031
- * (pipeline asli v3.9.71, FR-10).
+ * Tanpa `providedResult` → engine demo sintetis :3030 (data latih alur; di
+ * serverless memakai fallback EMBEDDED).
  * Opsi `providedResult` (Task 51 — agent lokal): hasil EngineResult diproses di
- * PYTHON LAPTOP user (tarik Drive + engine FastAPI lokal) lalu diunggah agent —
+ * PYTHON LAPTOP user (salin folder disk lokal + engine FastAPI lokal) lalu diunggah agent —
  * server TIDAK memanggil engine; hasil utuh disimpan di AgentResult (gzip+b64)
  * supaya KOMIT serverless tetap mungkin tanpa engine. FR-12 tetap jujur: engine
  * deterministik, jadi hasil tersimpan = output kanonik run itu. */
@@ -81,18 +80,15 @@ export async function processRun(
       agentName: opts.agentName ?? null,
     };
   } else {
-    const engineUrl = params.bundleId ? ENGINE_PROD_URL : undefined;
-    const bundlePath = params.bundleId ? await resolveBundlePath(params.bundleId) : undefined;
     const req: EngineProcessRequest = {
       periodKey: params.periodKey,
       tanggalH: params.tanggalH,
       ambangAcrPct: params.ambangAcrPct,
       bundleName: params.bundleName ?? undefined,
       seed: params.seed ?? 0,
-      ...(bundlePath ? { bundlePath } : {}),
     };
-    result = await engineProcess(req, engineUrl);
-    paramsForLog = { ...req, bundleId: params.bundleId ?? null };
+    result = await engineProcess(req);
+    paramsForLog = { ...req, engineSource: "demo" };
   }
 
   const runBatch = await db.runBatch.create({
@@ -258,8 +254,9 @@ export async function commitStep(runBatchId: string, budgetMs = 30_000): Promise
     ambangAcrPct: 80,
     bundleName: run.bundleName ?? undefined,
   });
-  // FR-12 idempotent: bundleId (bukan path) yang tersimpan — resolve ulang
-  // supaya komit tetap sahih walau direktori bundle dipindah/di-rename.
+  // Task 55: run produksi selalu hasil agent (engineSource="agent"); sisanya
+  // demo. Run lawas ber-marker bundleId tidak bisa dikomit lagi di serverless
+  // tanpa bundle — pesan jujur mengarahkan ke agent.
   const parsed = parseJsonSafe<{
     bundleId?: string | null;
     engineSource?: string;
@@ -267,6 +264,11 @@ export async function commitStep(runBatchId: string, budgetMs = 30_000): Promise
   }>(run.paramsJson, {});
   const bundleId = typeof parsed.bundleId === "string" ? parsed.bundleId : null;
   const isAgentRun = parsed.engineSource === "agent";
+  if (bundleId && !isAgentRun) {
+    throw new Error(
+      "Run lama berbasis unggahan bundle — jalur unggah sudah dihapus. Jalankan ulang lewat agent laptop (tab Proses & Ingest) lalu komit run barunya.",
+    );
+  }
 
   // ---- Hasil run (cache per-instance, lihat commitResultCache) ----
   const cached = commitResultCache.get(run.id);
@@ -283,17 +285,13 @@ export async function commitStep(runBatchId: string, budgetMs = 30_000): Promise
       }
       result = stored;
     } else {
-      result = await engineProcess(
-        {
-          periodKey: params.periodKey,
-          tanggalH: params.tanggalH,
-          ambangAcrPct: params.ambangAcrPct,
-          bundleName: params.bundleName ?? undefined,
-          seed: params.seed ?? 0,
-          ...(bundleId ? { bundlePath: await resolveBundlePath(bundleId) } : {}),
-        },
-        bundleId ? ENGINE_PROD_URL : undefined,
-      );
+      result = await engineProcess({
+        periodKey: params.periodKey,
+        tanggalH: params.tanggalH,
+        ambangAcrPct: params.ambangAcrPct,
+        bundleName: params.bundleName ?? undefined,
+        seed: params.seed ?? 0,
+      });
     }
     commitResultCache.set(run.id, { result, expires: Date.now() + 10 * 60_000 });
   }

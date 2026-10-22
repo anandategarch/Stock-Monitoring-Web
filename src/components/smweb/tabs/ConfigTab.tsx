@@ -81,7 +81,7 @@ function EngineSection() {
           <div className="space-y-4">
             <EngineCard
               title="PRODUKSI — pipeline asli v3.9.71"
-              hint="mini-services/engine-fastapi · port 3031 · dipakai saat ingest bundle ZIP (FR-10)"
+              hint="mini-services/engine-fastapi · port 3031 · dipakai AGENT LAPTOP saat memproses data asli (Task 55: jalur unggah ZIP/Drive ke server sudah dihapus)"
               health={data?.production?.health ?? null}
               error={data?.production?.error}
               runCmd="cd mini-services/engine-fastapi && bun run dev"

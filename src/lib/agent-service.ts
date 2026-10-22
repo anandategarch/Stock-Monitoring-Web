@@ -2,10 +2,12 @@
 // agent-service.ts — logika PEMBORONG job "Python di Laptop" (Task 51).
 // SERVER-ONLY. Arsitektur PULL: web tidak bisa menjangkau laptop di balik
 // NAT, jadi agent Python polling /api/agent/claim; setelah job di-jemput,
-// agent menarik file Drive + menjalankan engine FastAPI SECARA LOKAL,
-// lalu mengunggah hasil EngineResult ter-chunk (gzip+base64). Server merakit
-// hasil → membuat run pratinjau (RunBatch) → UI menampilkan → KOMIT memakai
-// hasil tersimpan (tanpa engine — serverless tidak punya engine).
+// agent MENYALIN folder export dari DISK LOKAL (RootPath, mis.
+// C:\KERJA\1. RESTO\9.NEW QUERY\ — Task 55: import Google Drive dihapus)
+// + menjalankan engine FastAPI SECARA LOKAL, lalu mengunggah hasil
+// EngineResult ter-chunk (gzip+base64). Server merakit hasil → membuat
+// run pratinjau (RunBatch) → UI menampilkan → KOMIT memakai hasil tersimpan
+// (tanpa engine — serverless tidak punya engine).
 // ============================================================
 import "server-only";
 import { Prisma } from "@prisma/client";
@@ -13,11 +15,9 @@ import { db } from "@/lib/db";
 import { clampString, parseIntInRange, isPeriodKey } from "@/lib/validate";
 import { ensureAgentTables, unpackResult } from "@/lib/agent-store";
 import { processRun } from "@/lib/snapshot-service";
+import { CANONICAL_FOLDERS, MAX_AGENT_FOLDERS, type CanonicalFolder } from "@/lib/canonical-folders";
 import type { EngineResult, EngineSummary } from "@/lib/types";
 import type { AgentJob, AgentJobChunk } from "@prisma/client";
-
-/** Maksimal link Drive per job (samakan tarikan server: 14 kanonik + cadangan). */
-const MAX_TARGETS = 16;
 /** Maksimal potongan hasil (32 × ±2,2 MB gzip ≈ jauh di atas kebutuhan riil ±3–6 MB). */
 const MAX_CHUNKS = 32;
 /** Panjang maksimal base64 per potongan (≈2,25 MB biner — body JSON aman < 4,5 MB Vercel). */
@@ -46,12 +46,15 @@ export class AgentServiceError extends Error {
 
 // ---------- Tipe publik (dipakai types.ts untuk DTO) ----------
 
+/** Target folder job agent — Task 55: berbasis FOLDER KANONIK config.json,
+ *  bukan link Drive. url/folderId hanya diisi null (kompatibilitas bentuk
+ *  lama; agent baru membaca folderName/folderKey dari RootPath disk). */
 export type AgentJobTarget = {
   rowId: string | null;
-  folderId: string;
-  url: string;
+  folderId: string | null;
+  url: string | null;
   folderName: string;
-  folderKey: string | null;
+  folderKey: string;
 };
 
 type JobRow = AgentJob & { chunks?: AgentJobChunk[] };
@@ -212,14 +215,22 @@ export async function createAgentJob(body: Record<string, unknown>): Promise<Age
   if (tanggalH === null) throw new AgentServiceError(422, "tanggalH wajib integer 1..31.");
   if (ambangAcrPct === null) throw new AgentServiceError(422, "ambangAcrPct wajib integer 1..200.");
 
-  const ids = Array.isArray(body.ids)
-    ? body.ids.filter((x): x is string => typeof x === "string")
+  // Task 55: target = FOLDER KANONIK config.json (agent mencarinya di RootPath
+  // disk lokal). Body lama `ids` (link Drive) tidak lagi diterima.
+  const folderKeys = Array.isArray(body.folders)
+    ? body.folders.filter((x): x is string => typeof x === "string")
     : [];
-  if (ids.length === 0) {
-    throw new AgentServiceError(422, "Centang minimal satu link Drive tersimpan untuk diproses agent.");
+  const uniq = [...new Set(folderKeys)];
+  if (uniq.length === 0) {
+    throw new AgentServiceError(422, "Centang minimal satu folder kanonik untuk diproses agent.");
   }
-  if (ids.length > MAX_TARGETS) {
-    throw new AgentServiceError(422, `Maksimal ${MAX_TARGETS} link Drive per job agent.`);
+  if (uniq.length > MAX_AGENT_FOLDERS) {
+    throw new AgentServiceError(422, `Maksimal ${MAX_AGENT_FOLDERS} folder per job agent.`);
+  }
+  const byKey = new Map(CANONICAL_FOLDERS.map((f) => [f.folderKey, f]));
+  const unknown = uniq.filter((k) => !byKey.has(k));
+  if (unknown.length > 0) {
+    throw new AgentServiceError(404, `Folder kanonik tidak dikenal: ${unknown.join(", ")}.`);
   }
 
   const active = await db.agentJob.findFirst({
@@ -234,33 +245,26 @@ export async function createAgentJob(body: Record<string, unknown>): Promise<Age
     );
   }
 
-  const rows = await db.driveFolderLink.findMany({ where: { id: { in: ids } } });
-  const missing = ids.filter((id) => !rows.some((r) => r.id === id));
-  if (missing.length > 0) {
-    throw new AgentServiceError(404, `Link tersimpan tidak ditemukan (id: ${missing.join(", ")}).`);
-  }
-  // Urutkan sesuai urutan ids UI (deterministik).
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const targets: AgentJobTarget[] = ids.map((id) => {
-    const r = byId.get(id)!;
-    return {
-      rowId: r.id,
-      folderId: r.folderId,
-      url: r.url,
-      folderName: r.folderName,
-      folderKey: r.folderKey,
-    };
-  });
+  // Urut sesuai urutan kanonik (deterministik, enak dibaca di log agent).
+  const targets: AgentJobTarget[] = CANONICAL_FOLDERS.filter(
+    (f: CanonicalFolder) => uniq.includes(f.folderKey),
+  ).map((f: CanonicalFolder) => ({
+    rowId: null,
+    folderId: null,
+    url: null,
+    folderName: f.folderName,
+    folderKey: f.folderKey,
+  }));
 
   const bundleName =
     clampString(body.bundleName, 120) ??
-    (targets.length === 1 ? targets[0]!.folderName : `Agent ${targets.length} folder Drive`);
+    (targets.length === 1 ? targets[0]!.folderName : `Agent ${targets.length} folder disk lokal`);
 
   let job;
   try {
     job = await db.agentJob.create({
       data: {
-        kind: "PROCESS_DRIVE",
+        kind: "PROCESS_LOCAL",
         status: "QUEUED",
         periodKey,
         tanggalH,

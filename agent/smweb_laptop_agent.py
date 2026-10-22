@@ -7,9 +7,9 @@ Cara kerja (arsitektur PULL — web tidak bisa menjangkau laptop di balik NAT):
   1. Kamu klik "Kirim N Folder → Laptop (Proses Python)" di web  → job QUEUED.
   2. Agent ini (berjalan di laptopmu) MENJEMPUT job lewat polling /api/agent/claim
      setiap beberapa detik.
-  3. Agent menarik file Excel dari folder Google Drive kamu ATAU MENYALIN
-     langsung dari folder data di disk lokal (Sumber Data — Task 53:
-     "langsung dari disk C, tanpa Google Drive"), menjalankan
+  3. Agent MENYALIN file Excel langsung dari folder data di DISK LOKAL kamu
+     (RootPath — mis. C:\\KERJA\\1. RESTO\\9.NEW QUERY, Task 53; Task 55:
+     dukungan Google Drive DIHAPUS — permintaan pemilik produk), menjalankan
      ENGINE FASTAPI PRODUKSI secara LOKAL (pipeline asli v3.9.71, port :3031),
      lalu mengunggah hasilnya (ter-gzip, terpotong-potong agar lolos batas body
      serverless) ke web.
@@ -30,19 +30,18 @@ Konfigurasi lewat ENV (atau ubah konstanta di bawah):
   SMWEB_AGENT_TOKEN   token yang sama dengan env AGENT_TOKEN di server
   SMWEB_ENGINE_URL    URL engine FastAPI lokal (default http://127.0.0.1:3031)
   SMWEB_AGENT_NAME    nama yang tampil di web (default: nama komputer)
-  SMWEB_DATA_SOURCE   sumber data job: auto (default) | local | drive
   SMWEB_LOCAL_ROOT    folder induk data lokal, setara RootPath config.json
                       desktop (mis. C:\\KERJA\\1. RESTO\\9.NEW QUERY) —
                       di dalamnya harus ada folder bernama sama dengan judul
-                      job ("1. DEVIASI WEEKLY", "2. 22.05", dst); dipakai saat
-                      sumber auto/local; launcher punya tombol "Sumber Data".
+                      job ("1. DEVIASI WEEKLY", "2. 22.05", dst).
+                      (Task 55: SMWEB_DATA_SOURCE lama diabaikan — agent kini
+                      HANYA membaca disk lokal; fitur Google Drive dihapus.)
 """
 
 import base64
 import calendar
 import getpass
 import gzip
-import html
 import json
 import os
 import random
@@ -67,13 +66,12 @@ AGENT_NAME = os.environ.get(
     f"laptop-{getpass.getuser() if os.name != 'nt' else os.environ.get('USERNAME', 'user')}",
 )[:80]
 WORKDIR = Path(os.environ.get("SMWEB_AGENT_WORKDIR", Path(__file__).resolve().parent / "smweb-agent-work"))
-# Sumber data job (permintaan user: "langsung dari disk C, tanpa Google Drive"):
-#   auto  = folder ada di disk (SMWEB_LOCAL_ROOT) → salin dari disk; sisanya Drive
-#   local = hanya disk — folder yang absen diberi catatan jujur, tanpa unduh Drive
-#   drive = selalu Google Drive (perilaku lama sebelum fitur ini)
-DATA_SOURCE = (os.environ.get("SMWEB_DATA_SOURCE") or "auto").strip().lower() or "auto"
-if DATA_SOURCE not in ("auto", "drive", "local"):
-    DATA_SOURCE = "auto"
+# Sumber data job (Task 55): DISK LOKAL SAJA — fitur Google Drive sudah
+# dihapus dari web (permintaan pemilik produk). Nilai SMWEB_DATA_SOURCE lama
+# (auto/drive) diabaikan; dicatat sebagai warning sekali saat startup.
+_DATA_SOURCE_ENV = (os.environ.get("SMWEB_DATA_SOURCE") or "").strip().lower()
+_DATA_SOURCE_DEPRECATED = _DATA_SOURCE_ENV in ("auto", "drive")
+DATA_SOURCE = "local"
 LOCAL_ROOT = (os.environ.get("SMWEB_LOCAL_ROOT") or "").strip()
 POLL_INTERVAL = 3.0          # detik antar polling job
 HEARTBEAT_INTERVAL = 8.0     # detik antar heartbeat saat memproses
@@ -85,7 +83,7 @@ MAX_TOTAL_BYTES = 400 * 1024 * 1024
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124 Safari/537.36")
 
-# Pemetaan folder kunci config.json — IDENTIK src/lib/bundles.ts (FR-2).
+# Pemetaan folder kunci config.json — IDENTIK src/lib/canonical-folders.ts (FR-2).
 FOLDER_TEMPLATE = [
     ("RekapBerjalan", "1. DEVIASI WEEKLY"),
     ("RekapLalu", "1.12 Rekap Mentah Bulan Lalu"),
@@ -144,40 +142,6 @@ def http_json(method, url, payload=None, token=None, timeout=30):
 # ------------------------- Drive: listing + unduh (port drive.ts) -------------------------
 
 
-def decode_entities(s):
-    return html.unescape(s)
-
-
-def parse_drive_date(raw):
-    """Port parseDriveDate (UTC, setara Date.UTC TS): 'Oct 20' / 'Oct 20, 2024' /
-    '8/25/25' / '12/3/2024' / '9:53 pm' → epoch ms, atau None."""
-    if not raw:
-        return None
-    s = raw.strip()
-    m = re.match(r"^([A-Za-z]{3})\s+(\d{1,2})(?:,\s*(\d{4}))?$", s)
-    if m and m.group(1).lower() in MONTHS:
-        year = int(m.group(3)) if m.group(3) else time.gmtime().tm_year
-        try:
-            return calendar.timegm((year, MONTHS[m.group(1).lower()] + 1, int(m.group(2)),
-                                    0, 0, 0, 0, 0, 0)) * 1000
-        except Exception:
-            return None
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})$", s)
-    if m:
-        month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if year < 100:
-            year += 2000
-        if 1 <= month <= 12 and 1 <= day <= 31:
-            return calendar.timegm((year, month, day, 0, 0, 0, 0, 0, 0)) * 1000
-    m = re.match(r"^(\d{1,2}):(\d{2})\s*(am|pm)$", s, re.IGNORECASE)
-    if m:
-        now = time.gmtime()
-        hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0)
-        return calendar.timegm((now.tm_year, now.tm_mon, now.tm_mday, hour, int(m.group(2)),
-                                0, 0, 0, 0)) * 1000
-    return None
-
-
 def map_drive_folder_key(folder_name):
     norm = lambda x: " ".join(x.strip().lower().split())
     for key, name in FOLDER_TEMPLATE:
@@ -201,93 +165,6 @@ class DriveError(Exception):
 
 class BadFileError(Exception):
     """File rusak/bukan Excel — DILEWATI dengan laporan jujur (bukan fatal)."""
-
-
-def list_drive_folder(folder_id, timeout=15):
-    if not FOLDER_ID_RE.match(folder_id):
-        raise DriveError("ID folder Drive tidak valid: %s" % folder_id)
-    url = "https://drive.google.com/embeddedfolderview?id=" + folder_id
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", UA)
-    req.add_header("Accept-Language", "en-US,en;q=0.9")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
-            if res.status == 404:
-                raise DriveError("Folder Drive tidak ditemukan (404) — cek link-nya.")
-            html_text = res.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            raise DriveError("Folder Drive tidak ditemukan (404) — cek link-nya.")
-        raise DriveError("Drive merespons HTTP %d — coba lagi sebentar." % e.code) from e
-    except urllib.error.URLError as e:
-        raise DriveError("Tidak bisa menghubungi Drive: %s" % getattr(e, "reason", e)) from e
-
-    m = re.search(r"<title>([^<]*)</title>", html_text)
-    title = decode_entities(m.group(1)).strip() if m else ""
-    if not title or "accounts.google.com" in html_text:
-        raise DriveError('Folder tidak bisa dibaca — pastikan dibagikan "Siapa saja yang '
-                         "memiliki link\" akses Viewer.")
-    entries = []
-    for block in html_text.split('<div class="flip-entry" id="entry-')[1:]:
-        end = block.find('"')
-        fid = block[:end] if end > 0 else ""
-        if not FOLDER_ID_RE.match(fid):
-            continue
-        nm = re.search(r'flip-entry-title">([^<]+)<', block)
-        if not nm:
-            continue
-        mod = re.search(r'flip-entry-last-modified"><div>([^<]+)<', block)
-        entries.append({
-            "id": fid,
-            "name": decode_entities(nm.group(1)),
-            "isFolder": "/drive/folders/" in block,
-            "modifiedMs": parse_drive_date(decode_entities(mod.group(1)) if mod else None),
-        })
-    if not entries:
-        raise DriveError('Folder Drive "%s" kosong atau isinya tidak terbaca.' % title)
-    return {"folderId": folder_id, "folderName": title, "entries": entries}
-
-
-def collect_drive_files(folder_id):
-    """Port collectDriveFiles: file Excel root + subfolder (kedalaman 2)."""
-    root = list_drive_folder(folder_id)
-    canonical = canonical_name_of(root["folderName"])
-    files, subfolders, skipped_non_excel, truncated_files = [], [], 0, False
-
-    for e in root["entries"]:
-        if e["isFolder"]:
-            subfolders.append(e)
-            continue
-        if not EXCEL_RE.search(e["name"]):
-            skipped_non_excel += 1
-            continue
-        if len(files) >= MAX_FILES:
-            truncated_files = True
-            break
-        files.append({"id": e["id"], "name": e["name"], "modifiedMs": e["modifiedMs"],
-                      "path": ("%s/%s" % (canonical, e["name"])) if canonical else e["name"]})
-    truncated_folders = len(subfolders) > MAX_SUBFOLDERS
-    failed_subfolders = []
-    for sub in subfolders[:MAX_SUBFOLDERS]:
-        try:
-            sub_list = list_drive_folder(sub["id"])
-        except DriveError:
-            failed_subfolders.append(sub["name"])
-            continue
-        for e in sub_list["entries"]:
-            if e["isFolder"] or not EXCEL_RE.search(e["name"]):
-                continue
-            if len(files) >= MAX_FILES:
-                truncated_files = True
-                break
-            files.append({"id": e["id"], "name": e["name"], "modifiedMs": e["modifiedMs"],
-                          "path": "%s/%s" % (sub["name"], e["name"])})
-    if not files:
-        raise DriveError('Tidak ada file Excel (.xlsx/.xls/.xlsb) di folder Drive "%s".' % root["folderName"])
-    return {"folderName": root["folderName"], "folderKey": map_drive_folder_key(root["folderName"]),
-            "files": files, "skippedNonExcel": skipped_non_excel,
-            "truncatedFiles": truncated_files, "truncatedFolders": truncated_folders,
-            "failedSubfolders": failed_subfolders}
 
 
 def dedupe_drive_files(files):
@@ -328,39 +205,6 @@ def dedupe_drive_files(files):
         used.add(out)
         kept.append(dict(ref, path=out))
     return {"kept": kept, "skipped": skipped, "suffixed": suffixed}
-
-
-def download_drive_file(file_id):
-    """Port downloadDriveFile: confirm=t retry + magic bytes Excel + batas ukuran."""
-    url = "https://drive.google.com/uc?export=download&id=" + file_id
-
-    def fetch(u):
-        req = urllib.request.Request(u)
-        req.add_header("User-Agent", UA)
-        req.add_header("Accept-Language", "en-US,en;q=0.9")
-        with urllib.request.urlopen(req, timeout=180) as res:
-            declared = int(res.headers.get("Content-Length") or 0)
-            if declared > MAX_FILE_BYTES:
-                raise DriveError("File %.0f MB — melebihi batas 60 MB per file." % (declared / 1048576))
-            return res.read()
-
-    buf = fetch(url)
-    head = buf[:512].lstrip().lower()
-    if head.startswith(b"<!doctype") or head.startswith(b"<html"):
-        buf = fetch(url + "&confirm=t")
-    head = buf[:512].lstrip().lower()
-    if head.startswith(b"<!doctype") or head.startswith(b"<html"):
-        raise BadFileError("Drive mengembalikan halaman konfirmasi/konflik — file tidak bisa ditarik otomatis.")
-    if len(buf) == 0:
-        raise BadFileError("File kosong (0 byte).")
-    if not (buf[:4] == b"PK\x03\x04" or buf[:4] == b"\xd0\xcf\x11\xe0"):
-        raise BadFileError("Isi bukan Excel (%d byte) — kemungkinan file rusak/placeholder." % len(buf))
-    if len(buf) > MAX_FILE_BYTES:
-        raise DriveError("File %.0f MB — melebihi batas 60 MB per file." % (len(buf) / 1048576))
-    return buf
-
-
-# ------------------------- Disk lokal: listing + salin (paralel Drive) -------------------------
 
 
 def find_local_folder(folder_name):
@@ -448,14 +292,8 @@ def collect_local_files(abs_dir, folder_name):
 
 
 def source_label():
-    """Deskripsi sumber data untuk banner."""
-    if DATA_SOURCE == "drive":
-        return "Google Drive"
-    if DATA_SOURCE == "local":
-        return "disk lokal — %s" % (LOCAL_ROOT or "(folder root belum diatur!)")
-    if LOCAL_ROOT:
-        return "otomatis — disk %s dulu, sisanya Drive" % LOCAL_ROOT
-    return "otomatis — Google Drive (folder data lokal belum diatur)"
+    """Deskripsi sumber data untuk banner (Task 55: disk lokal saja)."""
+    return "disk lokal — %s" % (LOCAL_ROOT or "(folder root belum diatur!)")
 
 
 # ------------------------- Bundle lokal + engine -------------------------
@@ -583,31 +421,26 @@ def process_job(agent, job):
     try:
         agent.progress(job_id, 2, "Membaca daftar file (%d folder)…" % len(targets))
 
-        # ---- listing + dedupe lintas folder (port planDrivePull) ----
-        # Sumber per-folder mengikuti DATA_SOURCE: "auto" = disk lokal dulu,
-        # folder yang absen ditarik dari Drive; "local" = hanya disk (folder
-        # absen → catatan, tanpa unduh); "drive" = seperti dulu.
+        # ---- listing + dedupe lintas folder ----
+        # Task 55: sumber = DISK LOKAL SAJA (fitur Google Drive dihapus).
+        # Folder yang tidak ada di RootPath diberi catatan jujur dan dilewati;
+        # semua folder absen → job gagal dengan pesan yang bisa ditindaklanjuti.
         merged = []
         seen_paths = set()
         missing_local = []
         for t in targets:
             agent.check_cancel("saat listing")
             folder_name = str(t.get("folderName") or "")
-            local_dir = find_local_folder(folder_name) if DATA_SOURCE in ("auto", "local") else None
+            local_dir = find_local_folder(folder_name)
             if local_dir:
                 col = collect_local_files(local_dir, folder_name)
                 src = "local"
                 log('  Folder "%s" ← DISK LOKAL (%s)' % (folder_name, local_dir))
-            elif DATA_SOURCE == "local":
-                missing_local.append(folder_name or str(t.get("folderId") or "?"))
+            else:
+                missing_local.append(folder_name or str(t.get("folderKey") or "?"))
                 notices.append('Folder "%s" tidak ada di disk lokal (%s) — dilewati.'
                                % (folder_name, LOCAL_ROOT or "root belum diatur"))
                 continue
-            else:
-                col = collect_drive_files(t["folderId"])
-                src = "drive"
-                if DATA_SOURCE == "auto":
-                    log('  Folder "%s" ← GOOGLE DRIVE (tidak ada di disk lokal)' % folder_name)
             ded = dedupe_drive_files(col["files"])
             if col["truncatedFiles"]:
                 notices.append('Folder "%s": file melebihi batas %d.' % (col["folderName"], MAX_FILES))
@@ -617,62 +450,49 @@ def process_job(agent, job):
                 notices.append('Subfolder "%s" gagal dibaca — dilewati.' % fs)
             for f in ded["kept"]:
                 if f["path"] in seen_paths:
-                    raise DriveError('Dua link memetakan ke path sama ("%s") — hapus salah satu.' % f["path"])
+                    raise DriveError('Dua folder memetakan ke path sama ("%s") — cek isi RootData.' % f["path"])
                 seen_paths.add(f["path"])
                 f["src"] = src
                 merged.append(f)
             skipped_files.extend(ded["skipped"])
         if not merged:
-            if missing_local:
-                raise DriveError("Tidak ada file Excel — folder berikut tidak ditemukan di disk "
-                                 'lokal "%s": "%s". Periksa tombol Sumber Data di launcher.'
-                                 % (LOCAL_ROOT or "(root belum diatur)", '", "'.join(missing_local)))
-            raise DriveError("Tidak ada file Excel yang bisa ditarik dari folder itu.")
+            raise DriveError("Tidak ada file Excel — folder berikut tidak ditemukan di disk "
+                             'lokal "%s": "%s". Atur SMWEB_LOCAL_ROOT / folder Root Data di '
+                             'launcher ke folder induk export (mis. C:\\KERJA\\1. RESTO\\9.NEW QUERY).'
+                             % (LOCAL_ROOT or "(root belum diatur)", '", "'.join(missing_local)))
 
-        # ---- salin dari disk / unduh dari Drive ----
+        # ---- salin dari disk lokal ----
         n = len(merged)
-        n_local = sum(1 for f in merged if f.get("src") == "local")
-        n_drive = n - n_local
-        if n_local:
-            log("Menyalin %d file Excel dari disk lokal…" % n_local)
-        if n_drive:
-            log("Menarik %d file Excel dari Google Drive…" % n_drive)
+        log("Menyalin %d file Excel dari disk lokal…" % n)
         for i, f in enumerate(merged):
-            is_local = f.get("src") == "local"
-            agent.check_cancel("saat menyalin %s" % f["name"] if is_local
-                               else "saat mengunduh %s" % f["name"])
+            agent.check_cancel("saat menyalin %s" % f["name"])
             agent.progress(job_id, 5 + int(60 * i / max(n, 1)),
-                           "%s %d/%d — %s" % ("Menyalin" if is_local else "Mengunduh",
-                                              i + 1, n, f["name"]))
+                           "Menyalin %d/%d — %s" % (i + 1, n, f["name"]))
             rel = safe_rel_path(f["path"])
             if not rel:
                 continue
             try:
-                if is_local:
-                    with open(f["abs"], "rb") as fh:
-                        buf = fh.read()
-                    if len(buf) == 0:
-                        raise BadFileError("File kosong (0 byte).")
-                    if len(buf) > MAX_FILE_BYTES:
-                        raise DriveError("File %.0f MB — melebihi batas 60 MB per file."
-                                         % (len(buf) / 1048576))
-                    head = buf[:4]
-                    if not (head == b"PK\x03\x04" or head == b"\xd0\xcf\x11\xe0"):
-                        raise BadFileError("Isi bukan Excel (%d byte) — kemungkinan rusak." % len(buf))
-                else:
-                    buf = download_drive_file(f["id"])
+                with open(f["abs"], "rb") as fh:
+                    buf = fh.read()
+                if len(buf) == 0:
+                    raise BadFileError("File kosong (0 byte).")
+                if len(buf) > MAX_FILE_BYTES:
+                    raise DriveError("File %.0f MB — melebihi batas 60 MB per file."
+                                     % (len(buf) / 1048576))
+                head = buf[:4]
+                if not (head == b"PK\x03\x04" or head == b"\xd0\xcf\x11\xe0"):
+                    raise BadFileError("Isi bukan Excel (%d byte) — kemungkinan rusak." % len(buf))
             except BadFileError as e:
                 skipped_files.append({"path": f["path"], "reason": str(e)})
                 log("  DILEWATI %s: %s" % (f["name"], e), "WARN")
                 continue
             total_bytes += len(buf)
             if total_bytes > MAX_TOTAL_BYTES:
-                raise DriveError("Total salinan/unduhan melebihi 400 MB — pisahkan foldernya.")
+                raise DriveError("Total salinan melebihi 400 MB — pisahkan foldernya.")
             dest = work / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(buf)
-            log("  [%d/%d] %s (%.1f MB)%s" % (i + 1, n, f["name"], len(buf) / 1048576,
-                " · disk" if is_local else ""), "OK")
+            log("  [%d/%d] %s (%.1f MB) · disk" % (i + 1, n, f["name"], len(buf) / 1048576), "OK")
 
         # ---- jalankan engine LOKAL ----
         agent.check_cancel("sebelum engine")
@@ -759,6 +579,12 @@ def main():
     log("  Sumber : %s" % source_label())
     log("  Kerja  : %s" % WORKDIR)
     log("=" * 64)
+    if _DATA_SOURCE_DEPRECATED:
+        log("Catatan: SMWEB_DATA_SOURCE=%s diabaikan — fitur Google Drive sudah "
+            "DIHAPUS (Task 55); agent hanya membaca disk lokal." % _DATA_SOURCE_ENV, "WARN")
+    if not LOCAL_ROOT:
+        log("Catatan: SMWEB_LOCAL_ROOT belum diatur — agent memakai RootPath bawaan "
+            "(atur lewat tombol Root Data di launcher bila folder data bukan default).", "WARN")
 
     agent = Agent()
 

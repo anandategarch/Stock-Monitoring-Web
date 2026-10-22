@@ -23,6 +23,7 @@ import { fmtInt, fmtQty, fmtRp, fmtSignedQty, signedQtyClass } from "@/lib/forma
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/smweb/empty-state";
 import { StatCard } from "@/components/smweb/stat-card";
+import { ExportButton } from "@/components/smweb/export-button";
 
 type SelisihRow = SelisihInResponse["rows"][number];
 
@@ -177,11 +178,16 @@ export default function SelisihInTab({ snapshotId }: { snapshotId: string | null
   return (
     <div className="space-y-5">
       {/* Judul + deskripsi */}
-      <div>
-        <h2 className="text-lg font-semibold">📤 Rekap Selisih IN</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          IN (Accurate: 42.05+32.24+99.01) vs BARANG MASUK (rekap) + Hasil Audit + 🏆 SKOR RESTO.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-semibold">📤 Rekap Selisih IN</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            IN (Accurate: 42.05+32.24+99.01) vs BARANG MASUK (rekap) + Hasil Audit + 🏆 SKOR RESTO.
+          </p>
+        </div>
+        {snapshotId ? (
+          <ExportButton snapshotId={snapshotId} sheet="selisih" size="sm" label="Export Selisih IN" />
+        ) : null}
       </div>
 
       {/* KPI total — nilai ini KUANTITAS (audit 48-g-ui): jangan format Rupiah */}

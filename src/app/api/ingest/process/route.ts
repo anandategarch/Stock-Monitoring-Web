@@ -42,29 +42,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Mode engine (FR-10 §5): "bundle" → engine PRODUKSI FastAPI (pipeline asli
-    // v3.9.71) atas bundle terunggah; default "demo" → engine sintetis :3030.
-    const mode = body.mode === "bundle" ? "bundle" : "demo";
-    const bundleId = typeof body.bundleId === "string" && body.bundleId ? body.bundleId : null;
-    if (mode === "bundle" && !bundleId) {
-      return NextResponse.json(
-        { error: "Mode bundle membutuhkan bundleId — unggah ZIP dulu di /api/ingest/upload." },
-        { status: 422 },
-      );
-    }
-    if (mode === "demo" && bundleId) {
-      return NextResponse.json(
-        { error: "Mode demo tidak memakai bundleId — pilih mode 'bundle'." },
-        { status: 422 },
-      );
-    }
-
+    // Task 55: hanya ada jalur engine DEMO sintetis di server (data asli =
+    // agent laptop, tab ini). mode/bundleId dari body diabaikan.
     const { runBatchId, result } = await processRun({
       periodKey,
       tanggalH,
       ambangAcrPct,
       bundleName: clampString(body.bundleName, 120),
-      bundleId: mode === "bundle" ? bundleId : null,
     });
     return NextResponse.json({
       runBatchId,

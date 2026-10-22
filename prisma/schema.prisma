@@ -314,39 +314,28 @@ model SourceFile {
   @@index([runBatchId])
 }
 
-// ---- Sumber folder Google Drive tersimpan (FR-1: ingest tanpa ZIP manual).
-// Satu baris = satu folder Drive publik ("siapa saja dengan link · Viewer").
-// folderKey terisi bila JUDUL folder cocok template config.json (FR-2) —
-// file ditarik langsung oleh server, path dibingkai nama folder kanonik.
-model DriveFolderLink {
-  id            String    @id @default(cuid())
-  url           String    @unique // bentuk kanonik drive.google.com/drive/folders/{id}
-  folderId      String
-  folderName    String
-  folderKey     String?
-  fileCount     Int       @default(0)
-  totalBytes    Int       @default(0)
-  lastCheckedAt DateTime?
-  lastUsedAt    DateTime?
-  createdAt     DateTime  @default(now())
-
-  @@index([folderKey])
-}
+// ---- DIHAPUS Task 55: model DriveFolderLink (link folder Google Drive
+// tersimpan) dihapus dari skema — fitur import Drive sudah tidak ada.
+// Tabel fisik lama di produksi (bila ada) dibiarkan tak terpakai: aman,
+// Prisma client tidak lagi mengenalnya.
 
 // ---- Papan job "Python di Laptop" (Agent lokal, hybrid). Web membuat job;
 // agent Python di laptop MEN-JEMPUT job lewat polling (Vercel tidak bisa
-// menjangkau laptop di balik NAT — arsitektur tarik/pull), memproses file
-// secara LOKAL (tarik Drive + engine FastAPI :3031), lalu mengunggah hasil
-// EngineResult secara ter-chunk (gzip+base64, batas body 4,5 MB serverless).
+// menjangkau laptop di balik NAT — arsitektur tarik/pull), menyalin FOLDER
+// KANONIK dari DISK LOKAL (Task 55: import Google Drive dihapus) + engine
+// FastAPI lokal memproses, lalu mengunggah hasil EngineResult ter-chunk
+// (gzip+base64, batas body 4,5 MB serverless).
 model AgentJob {
   id            String    @id @default(cuid())
-  kind          String    @default("PROCESS_DRIVE")
+  kind          String    @default("PROCESS_LOCAL")
   status        String    // QUEUED → RUNNING → (FINALIZING) → COMPLETED | FAILED | CANCELLED
   periodKey     String
   tanggalH      Int
   ambangAcrPct  Int
   bundleName    String?
-  // Target folder Drive yang dipilih UI: [{rowId, folderId, url, folderName, folderKey}]
+  // Target folder job: [{rowId, folderId, url, folderName, folderKey}] —
+  // Task 55: folder KANONIK config.json (url/folderId = null), agent mencari
+  // folderName di RootPath disk lokal.
   paramsJson    String
   progress      Int       @default(0)
   message       String?

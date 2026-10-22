@@ -232,7 +232,7 @@ export default function Page() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1.5 text-xs text-muted-foreground">
             <p className="flex items-center gap-1.5">
               <PackageSearch className="h-3.5 w-3.5" aria-hidden />
-              SM-WEB v0.1 · PRD v1.1 · definisi 3.9.71-noSI · ingest ZIP / folder langsung / Google Drive
+              SM-WEB v0.1 · PRD v1.1 · definisi 3.9.71-noSI · data asli via agent laptop (disk lokal)
             </p>
             <p>
               Snapshot permanen per periode · 9 label CEK · INV missing≠0 · single-user (D-6) ·

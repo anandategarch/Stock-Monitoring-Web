@@ -1,10 +1,11 @@
-# Agent Lokal — "Python di Laptop" (Task 51 + launcher sekali-klik Task 52 + Sumber Data disk lokal Task 53)
+# Agent Lokal — "Python di Laptop" (Task 51 + launcher sekali-klik Task 52 + disk-lokal Task 53; Task 55: Google Drive DIHAPUS)
 
-> **Idenya:** kamu klik **"Kirim N Folder → Laptop (Proses Python)"** di web →
-> Python di laptopmu menjemput job → **menarik file Google Drive ATAU menyalin
-> langsung dari folder data di disk lokal, lalu menjalankan engine FastAPI
-> (pipeline asli v3.9.71) secara LOKAL** → hasil diunggah ke web →
-> **tampil di web sebagai run pratinjau** → kamu menekan **Komit** di web.
+> **Idenya:** kamu klik **"Kirim N Folder → Laptop"** di web →
+> Python di laptopmu menjemput job → **menyalin langsung dari folder data di
+> disk lokal (RootPath — Task 55: import Google Drive sudah dihapus), lalu
+> menjalankan engine FastAPI (pipeline asli v3.9.71) secara LOKAL** → hasil
+> diunggah ke web → **tampil di web sebagai run pratinjau** → kamu menekan
+> **Komit** di web.
 > Seluruh pekerjaan berat (unduh/salin 100–300 MB, pipeline 79 ribu baris) terjadi di
 > laptop — situs (serverless Vercel) hanya menerima hasilnya, jadi **bebas dari
 > batas 60 detik / kuota /tmp / body 4,5 MB**.
@@ -18,8 +19,8 @@ Tidak ada tombol rahasia — seluruh alurnya hanya 5 langkah:
 2. **Web** — tekan **“Kirim N Folder → Laptop (Proses Python)”**. Job masuk papan;
    agent online menjemputnya dalam hitungan detik.
 3. **Laptop (otomatis, tidak perlu ditekan apa pun)** — agent menyalin Excel dari
-   disk C (mode *Disk Lokal / Otomatis*) atau mengunduh dari Drive → engine FastAPI
-   lokal memproses (pipeline asli v3.9.71) → hasil diunggah ke web.
+   disk C (RootPath) → engine FastAPI lokal memproses (pipeline asli v3.9.71)
+   → hasil diunggah ke web.
 4. **Web** — kartu job menunjukkan kemajuan → saat **SELESAI**, pratinjau run
    terbuka otomatis di panel bawah. **Tinjau** (ringkasan, manifest file, isu DQ,
    log pipeline) → tekan **Komit Snapshot** → snapshot periode tersimpan permanen
@@ -68,7 +69,7 @@ Saat **pertama kali** dijalankan:
    agent.
 3. Dashboard kecil menampilkan **WEB ✓ · ENGINE ✓ · AGENT ✓**, job yang sedang
    diproses, dan log langsung dari engine + agent. Ada tombol **MULAI/BERHENTI**,
-   **Buka Web**, **Perbarui GitHub**, **Ubah Token**, dan **Sumber Data**.
+   **Buka Web**, **Perbarui GitHub**, **Ubah Token**, dan **Root Data**.
 4. **Tinggalkan jendela terbuka** selama ingin tetap tersambung — tutup
    jendela (atau Ctrl+C) = putus dengan rapi. Agent punya `autostart` — begitu
    file dibuka semuanya menyala sendiri.
@@ -76,30 +77,31 @@ Saat **pertama kali** dijalankan:
 Saat berikutnya: dobel-klik file yang sama — langsung jalan (kode ikut
 ter-update otomatis lewat git pull).
 
-## Sumber Data — Google Drive vs DISK LOKAL (Task 53)
+## Root Data — DISK LOKAL SAJA (Task 55)
 
-Sesuai permintaan ("tidak pakai Google Drive lagi, langsung dari disk C"), agent
-bisa membaca Excel langsung dari folder data di disk laptop — **setara
-`RootPath` aplikasi desktop**. Atur lewat tombol **Sumber Data** di launcher:
+Fitur import Google Drive **sudah DIHAPUS dari web** (permintaan pemilik
+produk). Agent kini membaca Excel **hanya dari folder data di disk laptop** —
+**setara `RootPath` aplikasi desktop**. Atur lewat tombol **Root Data**
+di launcher.
 
-| Pilihan | Perilaku |
+| Hal | Perilaku |
 |---|---|
-| **Otomatis** (default) | Folder yang ada di disk → disalin dari disk; folder yang tidak ada → ditarik dari Google Drive (link yang dicentang di web). |
-| **Disk Lokal** | Tanpa Google Drive sama sekali. Folder yang tidak ada di disk diberi catatan jujur di log job (job tetap jalan dengan folder sisanya; bila SEMUA folder absen → job gagal dengan daftar folder yang hilang). |
-| **Google Drive** | Perilaku lama — selalu unduh dari Drive. |
+| **Sumber** | DISK LOKAL saja — tanpa Google Drive. |
+| **Folder absen** | Diberi catatan jujur di log job (job tetap jalan dengan folder sisanya; bila SEMUA folder absen → job gagal dengan daftar folder yang hilang). |
+| **Config lama** | Kunci `data_source` (auto/drive) diabaikan dengan warning; cukup atur `local_root`. |
 
-**Folder induk data lokal** (contoh: `C:\KERJA\1. RESTO\9.NEW QUERY`) harus
+**Folder induk data** (contoh: `C:\KERJA\1. RESTO\9.NEW QUERY`) harus
 berisi folder bernama sama persis dengan struktur desktop — `"1. DEVIASI
 WEEKLY"`, `"2. 22.05"`, `"3.1 42.15 Kirim"`, dst. Pencocokan judul folder
 **case-insensitive** (ala Windows). File Excel yang sedang dibuka di Excel
 (file kunci `~$…`) otomatis dilewati. Seleksi folder tetap dilakukan di web —
-kamu tetap mencentang folder mana yang dikirim ke laptop; yang berubah hanya
-**dari mana isinya dibaca**.
+kamu mencentang folder kanonik (14 folder config.json) yang dikirim ke
+laptop; isinya dibaca dari RootPath disk.
 
-Tersimpan di `laptop_config.json` (`data_source` + `local_root`), atau lewat
-CLI: `python mulai_laptop.py --source local --root "C:\\KERJA\\1. RESTO\\9.NEW QUERY"`.
-Untuk agent manual tanpa launcher: env `SMWEB_DATA_SOURCE` (auto|local|drive)
-+ `SMWEB_LOCAL_ROOT`.
+Tersimpan di `laptop_config.json` (`local_root`), atau lewat
+CLI: `python mulai_laptop.py --root "C:\\KERJA\\1. RESTO\\9.NEW QUERY"`.
+Untuk agent manual tanpa launcher: env `SMWEB_LOCAL_ROOT`
+(`SMWEB_DATA_SOURCE` lama diabaikan).
 
 Tanpa monitor/GUI (mis. SSH/server tanpa layar) launcher otomatis beralih ke
 **mode terminal**; paksa dengan `--console`. Opsi lain: `--once` (proses satu
@@ -125,7 +127,7 @@ rumahan, tanpa IP publik). Maka arah komunikasinya dibalik — *polling*:
 1. klik "Kirim … → Laptop"   ──┐
    job QUEUED di DB            │      2. POST /api/agent/claim tiap ±3 dtk (token)
                                └────────────────────────────────▶ "ada job!" → RUNNING
-                                     3. tarik file Excel dari Google Drive (lokal)
+                                     3. salin file Excel dari disk lokal (RootPath)
                                      4. POST /process ke engine FastAPI :3031 (lokal)
 3. UI poll job → progress bar  ◀──────────────────────────────── 5. unggah hasil ter-gzip
    "70% Engine FastAPI…"             ter-chunk (aman batas body serverless)
@@ -167,8 +169,8 @@ python3 agent/smweb_laptop_agent.py
 ```
 
 Agent akan menulis `Menunggu job…` — begitu kamu klik **Kirim … Folder →
-Laptop (Proses Python)** di tab **🚀 Proses & Ingest** (mode *Produksi*,
-centang link Drive yang mau diproses), agent menjemputnya dalam beberapa detik.
+Laptop** di tab **🚀 Proses & Ingest** (mode *Produksi*, centang folder
+kanonik yang mau diproses), agent menjemputnya dalam beberapa detik.
 Sesudah selesai, pratinjau run terbuka otomatis di web — tinggal **Komit Snapshot**.
 
 ### Variabel environment agent
@@ -179,14 +181,15 @@ Sesudah selesai, pratinjau run terbuka otomatis di web — tinggal **Komit Snaps
 | `SMWEB_AGENT_TOKEN` | `smweb-dev-agent-token` | **WAJIB** di produksi — sama dengan env `AGENT_TOKEN` di Vercel |
 | `SMWEB_ENGINE_URL` | `http://127.0.0.1:3031` | URL engine FastAPI lokal |
 | `SMWEB_AGENT_NAME` | `laptop-<user>` | Nama yang tampil di badge "AGENT ONLINE" |
+| `SMWEB_LOCAL_ROOT` | *(kosong)* | Folder induk data disk lokal (RootPath) — WAJIB untuk produksi |
 | `SMWEB_AGENT_WORKDIR` | `agent/smweb-agent-work` | Folder kerja sementara (dibersihkan tiap job) |
 
 Argumen `--once` = proses satu job lalu keluar (berguna untuk uji).
 
 ## Batas & perilaku jujur
 
-- Maksimal **16 link Drive** per job, **300 file**, **60 MB per file**,
-  **400 MB total** — sama dengan tarikan di sisi server.
+- Maksimal **14 folder kanonik** per job, **300 file**, **60 MB per file**,
+  **400 MB total** (folder yang tidak ada di RootPath diberi catatan jujur).
 - Hasil unggah dipecah potongan ±2 MB (gzip): 79 ribu baris nyata hanya
   ±0,7 MB ter-gzip — jauh di bawah batas.
 - Job RUNNING yang heartbeat-nya hilang ≥15 menit (laptop mati/koneksi putus)

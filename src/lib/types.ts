@@ -307,69 +307,24 @@ export interface IngestProcessResponse {
   durationMs: number;
 }
 
-/** Satu folder kunci config.json (FR-2 — pemetaan identik desktop v3.9.71). */
-export interface BundleFolderStat {
-  folderKey: string;
-  folderName: string;
-  fileCount: number;
-  totalBytes: number;
-  present: boolean;
-}
+// Task 55: BundleManifest/BundleFolderStat & DriveFolderLinkDto DIHAPUS —
+// jalur unggah ZIP/folder-ke-server dan import Google Drive sudah tidak ada.
+// Produksi kini lewat agent laptop (folder kanonik disk lokal) saja.
 
-/** Hasil unggah + validasi struktur bundle (FR-1). */
-export interface BundleManifest {
-  bundleId: string;
-  name: string;
-  uploadedAt: string;
-  fileCount: number;
-  totalBytes: number;
-  skippedEntries: number;
-  folders: BundleFolderStat[];
-  missingFolders: string[];
-  /** Asal bundle: "drive" = ditarik langsung dari Google Drive (opsional). */
-  source?: "upload" | "drive";
-  /** File Drive bernama sama yang DILEWATI (versi terbaru menang, jujur dilaporkan). */
-  skippedDuplicates?: { path: string; reason: string }[];
-  /** File Drive bernama sama yang DIPERTAHANKAN SEMUANYA (tanpa tanggal → akhiran __2 dst.). */
-  suffixedDuplicates?: string[];
-  /** Rincian per folder Drive yang ditarik (hanya sumber drive). */
-  driveFolders?: { folderName: string; folderKey: string | null; fileCount: number }[];
-  /** File Drive yang DILEWATI saat ditarik (rusak/bukan Excel/0 byte) — jujur. */
-  skippedFiles?: { path: string; reason: string }[];
-  /** Pemotongan batas / subfolder gagal dibaca saat tarikan Drive — jujur. */
-  driveNotices?: string[];
-  /** True = hasil "Pratinjau Cepat" (listing Drive saja): file TIDAK
-   *  diunduh, totalBytes tidak dihitung, bundleId kosong — TIDAK bisa
-   *  diproses; hanya untuk cek struktur/jumlah (bebas kuota serverless). */
-  previewOnly?: boolean;
-}
-
-/** Link folder Google Drive tersimpan — "biar ingat" (FR-1). */
-export interface DriveFolderLinkDto {
-  id: string;
-  url: string;
-  folderId: string;
-  folderName: string;
-  folderKey: string | null;
-  fileCount: number;
-  totalBytes: number;
-  lastCheckedAt: string | null;
-  lastUsedAt: string | null;
-  createdAt: string;
-}
-
-// ---------- Agent lokal "Python di Laptop" (Task 51) ----------
+// ---------- Agent lokal "Python di Laptop" (Task 51; Task 55 disk-lokal) ----------
 
 export type AgentJobStatus =
   | "QUEUED" | "RUNNING" | "FINALIZING" | "COMPLETED" | "FAILED" | "CANCELLED";
 
-/** Target folder Drive yang dijemput agent dari daftar link tersimpan. */
+/** Target folder job agent — FOLDER KANONIK config.json (Task 55: bukan
+ *  link Drive lagi; url/folderId selalu null, agent mencari folderName di
+ *  RootPath disk lokal). */
 export interface AgentJobTarget {
   rowId: string | null;
-  folderId: string;
-  url: string;
+  folderId: string | null;
+  url: string | null;
   folderName: string;
-  folderKey: string | null;
+  folderKey: string;
 }
 
 export interface AgentJobDto {

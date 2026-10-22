@@ -15,6 +15,7 @@ import {
 import { usePo } from "@/hooks/use-sm-api";
 import { useDebounced } from "@/hooks/use-debounced";
 import { EmptyState } from "@/components/smweb/empty-state";
+import { ExportButton } from "@/components/smweb/export-button";
 import { fmtInt, fmtQty } from "@/lib/format";
 import type { PoHeaderDto } from "@/lib/types";
 
@@ -90,14 +91,19 @@ export default function PoTab({ snapshotId }: { snapshotId: string | null }) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <ShoppingCart className="h-5 w-5 text-emerald-600" aria-hidden /> 🛒 Rincian PO
-        </h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Daftar purchase order per periode: nomor, tanggal, cabang, supplier, item, dan status
-          pesanan (32.42/32.43) + anotasi ↳ Status per PO.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <ShoppingCart className="h-5 w-5 text-emerald-600" aria-hidden /> 🛒 Rincian PO
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Daftar purchase order per periode: nomor, tanggal, cabang, supplier, item, dan status
+            pesanan (32.42/32.43) + anotasi ↳ Status per PO.
+          </p>
+        </div>
+        {snapshotId ? (
+          <ExportButton snapshotId={snapshotId} sheet="po" size="sm" label="Export PO" />
+        ) : null}
       </div>
 
       {/* Filter bar (state lokal → qs) */}
